@@ -139,9 +139,11 @@ Section "Install"
   ; .ps1 — used by the redactproof:// URL scheme handler only.
   ; Start-Process breaks out of the browser Job Object that kills grandchild
   ; processes when wscript.exe exits, which is why the .vbs cannot be used here.
+  ; IMPORTANT: $INSTDIR is a valid NSIS variable and expands correctly here.
+  ; Do NOT use $dir or $MyInvocation — those are not NSIS variables and expand
+  ; to empty string, producing a broken ps1 file.
   FileOpen $0 "$INSTDIR\start-bridge.ps1" w
-  FileWrite $0 '$dir = Split-Path -Parent $MyInvocation.MyCommand.Path$\r$\n'
-  FileWrite $0 'Start-Process -FilePath "$dir\node.exe" -ArgumentList "`"$dir\server.mjs`"" -WorkingDirectory $dir -WindowStyle Hidden$\r$\n'
+  FileWrite $0 'Start-Process -FilePath "$INSTDIR\node.exe" -ArgumentList "`"$INSTDIR\server.mjs`"" -WorkingDirectory "$INSTDIR" -WindowStyle Hidden$\r$\n'
   FileClose $0
 
   WriteRegStr HKCU "${RUN_KEY}" "${APP_ID}" '"wscript.exe" "$INSTDIR\start-bridge.vbs"'
