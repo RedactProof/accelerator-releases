@@ -149,13 +149,30 @@ Section "Install"
   ; the browser Job Object inheritance chain: schtasks.exe posts an RPC to the
   ; Scheduler service and exits immediately; the Scheduler launches the task
   ; under its own session, completely outside the browser's Job Object.
-  ; MultipleInstances=IgnoreNew prevents duplicate bridges if user clicks twice.
-  FileOpen $0 "$INSTDIR\register-task.ps1" w
-  FileWrite $0 '$$action = New-ScheduledTaskAction -Execute "wscript.exe" -Argument $\"$\"$INSTDIR\start-bridge.vbs$\"$\"$\r$\n'
-  FileWrite $0 'Register-ScheduledTask -TaskName "${APP_ID}" -Action $$action -Force | Out-Null$\r$\n'
+  ; Empty <Triggers/> means no automatic trigger — only schtasks /Run fires it.
+  ; MultipleInstancesPolicy=IgnoreNew prevents duplicate bridges on double-click.
+  FileOpen $0 "$INSTDIR\task.xml" w
+  FileWrite $0 '<?xml version="1.0" encoding="UTF-8"?>$\r$\n'
+  FileWrite $0 '<Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">$\r$\n'
+  FileWrite $0 '  <RegistrationInfo><Description>RedactProof Accelerator bridge</Description></RegistrationInfo>$\r$\n'
+  FileWrite $0 '  <Triggers/>$\r$\n'
+  FileWrite $0 '  <Settings>$\r$\n'
+  FileWrite $0 '    <MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>$\r$\n'
+  FileWrite $0 '    <DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>$\r$\n'
+  FileWrite $0 '    <StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>$\r$\n'
+  FileWrite $0 '    <Hidden>true</Hidden>$\r$\n'
+  FileWrite $0 '    <ExecutionTimeLimit>PT0S</ExecutionTimeLimit>$\r$\n'
+  FileWrite $0 '  </Settings>$\r$\n'
+  FileWrite $0 '  <Actions Context="Author">$\r$\n'
+  FileWrite $0 '    <Exec>$\r$\n'
+  FileWrite $0 '      <Command>wscript.exe</Command>$\r$\n'
+  FileWrite $0 '      <Arguments>$\"$INSTDIR\start-bridge.vbs$\"</Arguments>$\r$\n'
+  FileWrite $0 '    </Exec>$\r$\n'
+  FileWrite $0 '  </Actions>$\r$\n'
+  FileWrite $0 '</Task>$\r$\n'
   FileClose $0
-  nsExec::ExecToLog 'powershell.exe -ExecutionPolicy Bypass -NonInteractive -WindowStyle Hidden -File "$INSTDIR\register-task.ps1"'
-  Delete "$INSTDIR\register-task.ps1"
+  nsExec::ExecToLog 'schtasks /Create /XML "$INSTDIR\task.xml" /TN "${APP_ID}" /F'
+  Delete "$INSTDIR\task.xml"
 
   ; ===== Step 6: Register redactproof:// URL scheme =====
   ; schtasks /Run posts to the Scheduler service and returns immediately — safe
