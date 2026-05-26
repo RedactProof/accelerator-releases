@@ -137,7 +137,12 @@ Section "Install"
   CreateDirectory "$SMPROGRAMS\${APP_NAME}"
   CreateShortcut  "$SMPROGRAMS\${APP_NAME}\Uninstall.lnk" "$INSTDIR\Uninstall.exe"
 
-  ; ===== Step 5: Launch immediately =====
+  ; ===== Step 5: Register redactproof:// URL scheme =====
+  WriteRegStr HKCU "Software\Classes\redactproof" "" "URL:RedactProof Accelerator"
+  WriteRegStr HKCU "Software\Classes\redactproof" "URL Protocol" ""
+  WriteRegStr HKCU "Software\Classes\redactproof\shell\open\command" "" '"wscript.exe" "$INSTDIR\start-bridge.vbs" "%1"'
+
+  ; ===== Step 6: Launch immediately =====
   Exec '"wscript.exe" "$INSTDIR\start-bridge.vbs"'
   Return
 
@@ -169,4 +174,5 @@ Section "Uninstall"
   ; Registry.
   DeleteRegKey HKCU "${ARP_KEY}"
   DeleteRegKey HKCU "Software\${APP_ID}"
+  DeleteRegKey HKCU "Software\Classes\redactproof"
 SectionEnd
