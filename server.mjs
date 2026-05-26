@@ -99,7 +99,7 @@ env.useBrowserCache = false;
 const gliner = new Gliner({
   tokenizerPath,
   onnxSettings: {
-    modelPath: process.env.RP_MODEL_PATH ?? './core.bin',
+    modelPath: process.env.RP_MODEL_PATH ?? join(__dir, 'core.bin'),
     executionProvider: 'cpu',
   },
   maxWidth: MAX_WIDTH,

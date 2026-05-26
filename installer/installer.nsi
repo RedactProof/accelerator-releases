@@ -129,21 +129,14 @@ Section "Install"
   IfErrors payload_failed
 
   ; ===== Step 4: Launcher scripts, autostart, shortcut =====
-  ; .vbs — used by HKCU\Run autostart (not browser-launched, no job-object issue)
+  ; .vbs — used by HKCU\Run autostart and by the scheduled task.
+  ; wscript.exe + WScript.Shell.Run is the correct per-user silent launcher:
+  ; it works from the Task Scheduler context (which is outside the browser's
+  ; Job Object — the root cause that killed the previous PowerShell approach).
   FileOpen $0 "$INSTDIR\start-bridge.vbs" w
   FileWrite $0 'Set ws = CreateObject("WScript.Shell")$\r$\n'
   FileWrite $0 'ws.CurrentDirectory = "$INSTDIR"$\r$\n'
   FileWrite $0 'ws.Run """$INSTDIR\node.exe"" ""$INSTDIR\server.mjs""", 0, False$\r$\n'
-  FileClose $0
-
-  ; .ps1 — used by the redactproof:// URL scheme handler only.
-  ; Start-Process breaks out of the browser Job Object that kills grandchild
-  ; processes when wscript.exe exits, which is why the .vbs cannot be used here.
-  ; IMPORTANT: $INSTDIR is a valid NSIS variable and expands correctly here.
-  ; Do NOT use $dir or $MyInvocation — those are not NSIS variables and expand
-  ; to empty string, producing a broken ps1 file.
-  FileOpen $0 "$INSTDIR\start-bridge.ps1" w
-  FileWrite $0 'Start-Process -FilePath "$INSTDIR\node.exe" -ArgumentList "`"$INSTDIR\server.mjs`"" -WorkingDirectory "$INSTDIR" -WindowStyle Hidden$\r$\n'
   FileClose $0
 
   WriteRegStr HKCU "${RUN_KEY}" "${APP_ID}" '"wscript.exe" "$INSTDIR\start-bridge.vbs"'
@@ -151,12 +144,27 @@ Section "Install"
   CreateDirectory "$SMPROGRAMS\${APP_NAME}"
   CreateShortcut  "$SMPROGRAMS\${APP_NAME}\Uninstall.lnk" "$INSTDIR\Uninstall.exe"
 
-  ; ===== Step 5: Register redactproof:// URL scheme =====
+  ; ===== Step 5: Register Windows Scheduled Task =====
+  ; The task is the URL-scheme launch target. Running via Task Scheduler breaks
+  ; the browser Job Object inheritance chain: schtasks.exe posts an RPC to the
+  ; Scheduler service and exits immediately; the Scheduler launches the task
+  ; under its own session, completely outside the browser's Job Object.
+  ; MultipleInstances=IgnoreNew prevents duplicate bridges if user clicks twice.
+  FileOpen $0 "$INSTDIR\register-task.ps1" w
+  FileWrite $0 '$$action = New-ScheduledTaskAction -Execute "wscript.exe" -Argument $\"$\"$INSTDIR\start-bridge.vbs$\"$\"$\r$\n'
+  FileWrite $0 'Register-ScheduledTask -TaskName "${APP_ID}" -Action $$action -Force | Out-Null$\r$\n'
+  FileClose $0
+  nsExec::ExecToLog 'powershell.exe -ExecutionPolicy Bypass -NonInteractive -WindowStyle Hidden -File "$INSTDIR\register-task.ps1"'
+  Delete "$INSTDIR\register-task.ps1"
+
+  ; ===== Step 6: Register redactproof:// URL scheme =====
+  ; schtasks /Run posts to the Scheduler service and returns immediately — safe
+  ; to call from inside Chrome/Edge's Job Object.
   WriteRegStr HKCU "Software\Classes\redactproof" "" "URL:RedactProof Accelerator"
   WriteRegStr HKCU "Software\Classes\redactproof" "URL Protocol" ""
-  WriteRegStr HKCU "Software\Classes\redactproof\shell\open\command" "" 'powershell.exe -ExecutionPolicy Bypass -WindowStyle Hidden -NonInteractive -File "$INSTDIR\start-bridge.ps1" "%1"'
+  WriteRegStr HKCU "Software\Classes\redactproof\shell\open\command" "" 'schtasks.exe /Run /TN "${APP_ID}"'
 
-  ; ===== Step 6: Launch immediately =====
+  ; ===== Step 7: Launch immediately =====
   Exec '"wscript.exe" "$INSTDIR\start-bridge.vbs"'
   Return
 
@@ -172,8 +180,9 @@ Section "Uninstall"
   nsExec::Exec 'cmd /c "if exist "$INSTDIR\bridge.pid" (for /f %i in ($INSTDIR\bridge.pid) do taskkill /F /PID %i)"'
   Sleep 500
 
-  ; Remove autostart.
+  ; Remove autostart and scheduled task.
   DeleteRegValue HKCU "${RUN_KEY}" "${APP_ID}"
+  nsExec::Exec 'schtasks.exe /Delete /TN "${APP_ID}" /F'
 
   ; Remove discovery file.
   Delete "$PROFILE\.redactproof\accelerator.json"
