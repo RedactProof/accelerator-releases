@@ -1,6 +1,6 @@
 {
   "name": "redactproof-accelerator",
-  "version": "0.0.3",
+  "version": "0.0.4",
   "description": "RedactProof local detection helper",
   "private": true,
   "type": "module",

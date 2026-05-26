@@ -152,7 +152,7 @@ Section "Install"
   ; ===== Step 5: Register redactproof:// URL scheme =====
   WriteRegStr HKCU "Software\Classes\redactproof" "" "URL:RedactProof Accelerator"
   WriteRegStr HKCU "Software\Classes\redactproof" "URL Protocol" ""
-  WriteRegStr HKCU "Software\Classes\redactproof\shell\open\command" "" 'powershell.exe -WindowStyle Hidden -NonInteractive -File "$INSTDIR\start-bridge.ps1"'
+  WriteRegStr HKCU "Software\Classes\redactproof\shell\open\command" "" 'powershell.exe -ExecutionPolicy Bypass -WindowStyle Hidden -NonInteractive -File "$INSTDIR\start-bridge.ps1" "%1"'
 
   ; ===== Step 6: Launch immediately =====
   Exec '"wscript.exe" "$INSTDIR\start-bridge.vbs"'
