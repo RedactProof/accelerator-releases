@@ -11,7 +11,10 @@
 ;   6. Launch the bridge.
 
 !define APP_NAME "RedactProof Accelerator"
-!define APP_VERSION "0.0.1"
+; APP_VERSION is passed in via /DAPP_VERSION=x.y.z from build.ps1
+!ifndef APP_VERSION
+  !define APP_VERSION "0.0.0"
+!endif
 !define APP_PUBLISHER "Popsall Ltd"
 !define APP_URL "https://redactproof.com"
 !define APP_EXE "node.exe"
@@ -57,7 +60,7 @@ ShowUninstDetails show
 
 !insertmacro MUI_LANGUAGE "English"
 
-VIProductVersion "0.0.1.0"
+VIProductVersion "${APP_VERSION}.0"
 VIAddVersionKey "ProductName" "${APP_NAME}"
 VIAddVersionKey "CompanyName" "${APP_PUBLISHER}"
 VIAddVersionKey "FileVersion" "${APP_VERSION}"

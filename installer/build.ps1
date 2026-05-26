@@ -15,6 +15,10 @@ $ErrorActionPreference = 'Stop'
 $NODE_VERSION = '22.11.0'
 $ARCHES = @('x64', 'arm64')
 
+$packageJson = Get-Content (Join-Path (Split-Path -Parent $PSScriptRoot) 'package.json') | ConvertFrom-Json
+$APP_VERSION = $packageJson.version
+Write-Host "Building version $APP_VERSION" -ForegroundColor Cyan
+
 $scriptRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 $bridgeRoot = Split-Path -Parent $scriptRoot
 $distDir    = Join-Path $bridgeRoot 'dist'
@@ -155,10 +159,10 @@ function Build-Arch($arch) {
 
     Write-Host "[nsis] compiling installer for $arch"
     $nsiPath = Join-Path $scriptRoot 'installer.nsi'
-    & cmd /c "`"$makensis`" /DARCH=$arch `"$nsiPath`" 2>&1" | Out-Host
+    & cmd /c "`"$makensis`" /DARCH=$arch /DAPP_VERSION=$APP_VERSION `"$nsiPath`" 2>&1" | Out-Host
     if ($LASTEXITCODE -ne 0) { throw "makensis failed for $arch" }
 
-    $output = Join-Path $distDir "RedactProof-Accelerator-Setup-$arch-0.0.1.exe"
+    $output = Join-Path $distDir "RedactProof-Accelerator-Setup-$arch-$APP_VERSION.exe"
     if (-not (Test-Path $output)) { throw "Expected output not found: $output" }
     $size = [math]::Round((Get-Item $output).Length / 1MB, 1)
     Write-Host "[ok] $output ($size MB)" -ForegroundColor Green
