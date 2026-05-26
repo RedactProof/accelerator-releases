@@ -128,11 +128,20 @@ Section "Install"
   File /r "..\dist\payload-${ARCH}\*.*"
   IfErrors payload_failed
 
-  ; ===== Step 4: Launcher .vbs, autostart, shortcut =====
+  ; ===== Step 4: Launcher scripts, autostart, shortcut =====
+  ; .vbs — used by HKCU\Run autostart (not browser-launched, no job-object issue)
   FileOpen $0 "$INSTDIR\start-bridge.vbs" w
   FileWrite $0 'Set ws = CreateObject("WScript.Shell")$\r$\n'
   FileWrite $0 'ws.CurrentDirectory = "$INSTDIR"$\r$\n'
   FileWrite $0 'ws.Run """$INSTDIR\node.exe"" ""$INSTDIR\server.mjs""", 0, False$\r$\n'
+  FileClose $0
+
+  ; .ps1 — used by the redactproof:// URL scheme handler only.
+  ; Start-Process breaks out of the browser Job Object that kills grandchild
+  ; processes when wscript.exe exits, which is why the .vbs cannot be used here.
+  FileOpen $0 "$INSTDIR\start-bridge.ps1" w
+  FileWrite $0 '$dir = Split-Path -Parent $MyInvocation.MyCommand.Path$\r$\n'
+  FileWrite $0 'Start-Process -FilePath "$dir\node.exe" -ArgumentList "`"$dir\server.mjs`"" -WorkingDirectory $dir -WindowStyle Hidden$\r$\n'
   FileClose $0
 
   WriteRegStr HKCU "${RUN_KEY}" "${APP_ID}" '"wscript.exe" "$INSTDIR\start-bridge.vbs"'
@@ -143,7 +152,7 @@ Section "Install"
   ; ===== Step 5: Register redactproof:// URL scheme =====
   WriteRegStr HKCU "Software\Classes\redactproof" "" "URL:RedactProof Accelerator"
   WriteRegStr HKCU "Software\Classes\redactproof" "URL Protocol" ""
-  WriteRegStr HKCU "Software\Classes\redactproof\shell\open\command" "" '"wscript.exe" "$INSTDIR\start-bridge.vbs" "%1"'
+  WriteRegStr HKCU "Software\Classes\redactproof\shell\open\command" "" 'powershell.exe -WindowStyle Hidden -NonInteractive -File "$INSTDIR\start-bridge.ps1"'
 
   ; ===== Step 6: Launch immediately =====
   Exec '"wscript.exe" "$INSTDIR\start-bridge.vbs"'
@@ -167,7 +176,7 @@ Section "Uninstall"
   ; Remove discovery file.
   Delete "$PROFILE\.redactproof\accelerator.json"
 
-  ; Remove install dir.
+  ; Remove install dir (includes start-bridge.vbs, start-bridge.ps1, etc).
   RMDir /r "$INSTDIR"
 
   ; Start menu.
