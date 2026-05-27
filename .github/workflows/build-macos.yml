@@ -85,16 +85,33 @@ jobs:
 
       - name: Import signing certificate
         env:
-          P12_BASE64: ${{ secrets.DEVELOPER_ID_P12 }}
-          P12_PASSWORD: ${{ secrets.DEVELOPER_ID_P12_PASSWORD }}
+          DEVELOPER_ID_KEY: ${{ secrets.DEVELOPER_ID_KEY }}
+          DEVELOPER_ID_CERT: ${{ secrets.DEVELOPER_ID_CERT }}
         run: |
-          echo "$P12_BASE64" | base64 --decode > /tmp/developer_id.p12
+          # Write PEMs from secrets
+          printf '%s' "$DEVELOPER_ID_KEY"  > /tmp/dev_id.key
+          printf '%s' "$DEVELOPER_ID_CERT" > /tmp/dev_id.crt
+
+          # Create .p12 on macOS using LibreSSL with a throwaway password
+          TEMP_PASS=$(openssl rand -hex 16)
+          openssl pkcs12 -export \
+            -inkey /tmp/dev_id.key \
+            -in    /tmp/dev_id.crt \
+            -out   /tmp/developer_id.p12 \
+            -passout pass:"$TEMP_PASS"
+
+          # Install Apple Developer ID intermediate so chain is complete
+          curl -fsSL https://www.apple.com/certificateauthority/DeveloperIDG2CA.cer -o /tmp/DeveloperIDG2CA.cer
+          security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keychain /tmp/DeveloperIDG2CA.cer 2>/dev/null || true
+
+          # Import into a fresh keychain
           security create-keychain -p "" build.keychain
           security default-keychain -s build.keychain
           security unlock-keychain -p "" build.keychain
-          security import /tmp/developer_id.p12 -k build.keychain -P "$P12_PASSWORD" -T /usr/bin/codesign
+          security import /tmp/developer_id.p12 -k build.keychain -P "$TEMP_PASS" -T /usr/bin/codesign
           security set-key-partition-list -S apple-tool:,apple: -s -k "" build.keychain
-          rm /tmp/developer_id.p12
+
+          rm /tmp/dev_id.key /tmp/dev_id.crt /tmp/developer_id.p12
 
       - name: Sign .app
         run: |
