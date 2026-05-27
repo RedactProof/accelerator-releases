@@ -64,6 +64,12 @@ jobs:
             printf 'module.exports=function(){throw new Error("sharp stub");};module.exports.default=module.exports;' > "$dir/index.js"
           done
           find payload/node_modules -type d -name '@img' -exec rm -rf {} + 2>/dev/null || true
+          # Strip non-darwin-arm64 prebuilds from all packages (bare-fs, bare-os, bare-url, etc.)
+          find payload/node_modules -name 'prebuilds' -type d | while IFS= read -r prebuild_dir; do
+            find "$prebuild_dir" -mindepth 1 -maxdepth 1 -type d | while IFS= read -r sub; do
+              [ "$(basename "$sub")" != "darwin-arm64" ] && rm -rf "$sub" && echo "pruned: $sub"
+            done
+          done
 
       - name: Build .app bundle
         env:
@@ -77,6 +83,13 @@ jobs:
           cp payload/core.bin          "$APP/Contents/Resources/core.bin"
           cp -r payload/tokenizer      "$APP/Contents/Resources/tokenizer"
           cp -r payload/node_modules   "$APP/Contents/Resources/node_modules"
+
+          # Belt-and-suspenders: prune non-darwin-arm64 prebuilds from app bundle
+          find "$APP/Contents/Resources/node_modules" -name 'prebuilds' -type d | while IFS= read -r prebuild_dir; do
+            find "$prebuild_dir" -mindepth 1 -maxdepth 1 -type d | while IFS= read -r sub; do
+              [ "$(basename "$sub")" != "darwin-arm64" ] && rm -rf "$sub" && echo "pruned from bundle: $sub"
+            done
+          done
 
           cp installer/macos/launcher.sh "$APP/Contents/MacOS/RedactProofAccelerator"
           chmod +x "$APP/Contents/MacOS/RedactProofAccelerator"
@@ -116,8 +129,8 @@ jobs:
       - name: Sign .app
         run: |
           SIGN_ID=$(security find-identity -v -p codesigning build.keychain | grep "Developer ID Application" | head -1 | awk '{print $2}')
-          # Sign all Mach-O binaries inside the bundle (node addons, dylibs, etc.)
-          find "RedactProofAccelerator.app" \( -name "*.node" -o -name "*.dylib" -o -name "*.so" \) | while read f; do
+          # Sign all Mach-O binaries inside the bundle (.node, .dylib, .bare, etc.)
+          find "RedactProofAccelerator.app" \( -name "*.node" -o -name "*.dylib" -o -name "*.so" -o -name "*.bare" \) | while read f; do
             codesign --force --sign "$SIGN_ID" --options runtime --timestamp "$f" 2>/dev/null || true
           done
           # Sign the node binary with entitlements
