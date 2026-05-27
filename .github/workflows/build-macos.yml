@@ -67,7 +67,7 @@ jobs:
           # Strip non-darwin-arm64 prebuilds from all packages (bare-fs, bare-os, bare-url, etc.)
           find payload/node_modules -name 'prebuilds' -type d | while IFS= read -r prebuild_dir; do
             find "$prebuild_dir" -mindepth 1 -maxdepth 1 -type d | while IFS= read -r sub; do
-              [ "$(basename "$sub")" != "darwin-arm64" ] && rm -rf "$sub" && echo "pruned: $sub"
+              if [ "$(basename "$sub")" != "darwin-arm64" ]; then rm -rf "$sub"; echo "pruned: $sub"; fi
             done
           done
 
@@ -87,7 +87,7 @@ jobs:
           # Belt-and-suspenders: prune non-darwin-arm64 prebuilds from app bundle
           find "$APP/Contents/Resources/node_modules" -name 'prebuilds' -type d | while IFS= read -r prebuild_dir; do
             find "$prebuild_dir" -mindepth 1 -maxdepth 1 -type d | while IFS= read -r sub; do
-              [ "$(basename "$sub")" != "darwin-arm64" ] && rm -rf "$sub" && echo "pruned from bundle: $sub"
+              if [ "$(basename "$sub")" != "darwin-arm64" ]; then rm -rf "$sub"; echo "pruned from bundle: $sub"; fi
             done
           done
 
