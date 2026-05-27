@@ -143,11 +143,8 @@ jobs:
           VERSION: ${{ github.event.inputs.version }}
         run: |
           SHA=$(shasum -a 256 "$DMG" | awk '{print $1}')
+          NOTES=$(printf 'macOS Apple Silicon installer for RedactProof Accelerator v%s.\n\nDrag RedactProofAccelerator to Applications, then open it once. Runs silently in the background and starts automatically at login.\n\nSHA-256: `%s`' "$VERSION" "$SHA")
           gh release create "accelerator-macos-v${VERSION}" "$DMG" \
             --repo RedactProof/accelerator-releases \
             --title "Accelerator macOS v${VERSION}" \
-            --notes "macOS Apple Silicon installer for RedactProof Accelerator v${VERSION}.
-
-Drag RedactProofAccelerator to Applications, then open it once. Runs silently in the background and starts automatically at login.
-
-SHA-256: \`${SHA}\`"
+            --notes "$NOTES"
