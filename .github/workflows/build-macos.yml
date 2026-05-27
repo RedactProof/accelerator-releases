@@ -1,0 +1,255 @@
+name: Build macOS Installer
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version (e.g. 0.0.7)'
+        required: true
+
+jobs:
+  build:
+    runs-on: macos-14
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download core.bin
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release download model-v1 \
+            --repo RedactProof/accelerator-releases \
+            --pattern "core.bin" \
+            --output core.bin
+
+      - name: Download Node.js arm64
+        run: |
+          NODE_VERSION=22.11.0
+          curl -fsSL "https://nodejs.org/dist/v${NODE_VERSION}/node-v${NODE_VERSION}-darwin-arm64.tar.gz" -o node.tar.gz
+          tar -xzf node.tar.gz
+          echo "NODE_BIN=$(pwd)/node-v${NODE_VERSION}-darwin-arm64/bin/node" >> $GITHUB_ENV
+
+      - name: Stage payload
+        run: |
+          mkdir -p payload
+          cp "$NODE_BIN" payload/node
+          cp server.mjs payload/
+          cp core.bin payload/
+          cp package.json payload/
+          cp -r tokenizer payload/
+
+      - name: npm install
+        working-directory: payload
+        run: npm install --omit=dev --no-audit --no-fund
+
+      - name: Prune cross-platform binaries
+        run: |
+          # Strip non-darwin onnxruntime native binaries
+          find payload/node_modules -type d -name 'onnxruntime-node' | while read dir; do
+            for napi in napi-v3 napi-v6; do
+              napi_dir="$dir/bin/$napi"
+              [ -d "$napi_dir" ] || continue
+              find "$napi_dir" -mindepth 1 -maxdepth 1 -type d ! -name 'darwin' -exec rm -rf {} +
+            done
+          done
+          # Remove WASM bundles
+          XENOVA_DIST="payload/node_modules/@xenova/transformers/dist"
+          if [ -d "$XENOVA_DIST" ]; then
+            find "$XENOVA_DIST" -name '*.wasm' -delete
+            find "$XENOVA_DIST" -name '*.map' -delete
+          fi
+          # Stub onnxruntime-web
+          find payload/node_modules -type d -name 'onnxruntime-web' | while read dir; do
+            rm -rf "$dir" && mkdir -p "$dir"
+            printf '{"name":"onnxruntime-web","version":"0.0.0-stub","main":"index.js"}' > "$dir/package.json"
+            printf 'module.exports={InferenceSession:{},Tensor:function(){},env:{wasm:{}}};module.exports.default=module.exports;' > "$dir/index.js"
+          done
+          # Stub sharp
+          find payload/node_modules -type d -name 'sharp' | while read dir; do
+            rm -rf "$dir" && mkdir -p "$dir"
+            printf '{"name":"sharp","version":"0.0.0-stub","main":"index.js"}' > "$dir/package.json"
+            printf 'module.exports=function(){throw new Error("sharp stub");};module.exports.default=module.exports;' > "$dir/index.js"
+          done
+          find payload/node_modules -type d -name '@img' -exec rm -rf {} + 2>/dev/null || true
+
+      - name: Build .app bundle
+        env:
+          VERSION: ${{ github.event.inputs.version }}
+        run: |
+          APP="RedactProofAccelerator.app"
+          mkdir -p "$APP/Contents/MacOS"
+          mkdir -p "$APP/Contents/Resources"
+
+          # Copy payload into Resources
+          cp payload/node    "$APP/Contents/Resources/node"
+          cp payload/server.mjs "$APP/Contents/Resources/server.mjs"
+          cp payload/core.bin   "$APP/Contents/Resources/core.bin"
+          cp -r payload/tokenizer    "$APP/Contents/Resources/tokenizer"
+          cp -r payload/node_modules "$APP/Contents/Resources/node_modules"
+
+          # Launcher — installs LaunchAgent on first run, then starts bridge
+          cat > "$APP/Contents/MacOS/RedactProofAccelerator" << 'LAUNCHER'
+          #!/bin/bash
+          RESOURCES="$(cd "$(dirname "$0")/../Resources" && pwd)"
+          BUNDLE="$(cd "$(dirname "$0")/../.." && pwd)"
+          PLIST="$HOME/Library/LaunchAgents/com.popsall.redactproof.accelerator.plist"
+
+          if [ ! -f "$PLIST" ]; then
+            mkdir -p "$HOME/Library/LaunchAgents"
+            cat > "$PLIST" << EOF
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+              <key>Label</key>
+              <string>com.popsall.redactproof.accelerator</string>
+              <key>ProgramArguments</key>
+              <array>
+                  <string>$BUNDLE/Contents/MacOS/RedactProofAccelerator</string>
+              </array>
+              <key>RunAtLoad</key>
+              <true/>
+              <key>KeepAlive</key>
+              <false/>
+          </dict>
+          </plist>
+          EOF
+            launchctl load "$PLIST" 2>/dev/null || true
+          fi
+
+          if pgrep -f "server.mjs" > /dev/null 2>&1; then exit 0; fi
+          nohup "$RESOURCES/node" "$RESOURCES/server.mjs" > /dev/null 2>&1 &
+          LAUNCHER
+          chmod +x "$APP/Contents/MacOS/RedactProofAccelerator"
+
+          # Info.plist — LSUIElement keeps it out of the Dock
+          cat > "$APP/Contents/Info.plist" << EOF
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+            <key>CFBundleIdentifier</key>
+            <string>com.popsall.redactproof.accelerator</string>
+            <key>CFBundleName</key>
+            <string>RedactProof Accelerator</string>
+            <key>CFBundleDisplayName</key>
+            <string>RedactProof Accelerator</string>
+            <key>CFBundleVersion</key>
+            <string>$VERSION</string>
+            <key>CFBundleShortVersionString</key>
+            <string>$VERSION</string>
+            <key>CFBundlePackageType</key>
+            <string>APPL</string>
+            <key>CFBundleExecutable</key>
+            <string>RedactProofAccelerator</string>
+            <key>LSUIElement</key>
+            <true/>
+            <key>CFBundleURLTypes</key>
+            <array>
+              <dict>
+                <key>CFBundleURLName</key>
+                <string>RedactProof Accelerator</string>
+                <key>CFBundleURLSchemes</key>
+                <array>
+                  <string>redactproof</string>
+                </array>
+              </dict>
+            </array>
+          </dict>
+          </plist>
+          EOF
+
+          # Entitlements — required for Node.js under hardened runtime
+          cat > entitlements.plist << 'EOF'
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+            <key>com.apple.security.cs.allow-jit</key>
+            <true/>
+            <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
+            <true/>
+            <key>com.apple.security.cs.disable-library-validation</key>
+            <true/>
+          </dict>
+          </plist>
+          EOF
+
+      - name: Import signing certificate
+        env:
+          P12_BASE64: ${{ secrets.DEVELOPER_ID_P12 }}
+          P12_PASSWORD: ${{ secrets.DEVELOPER_ID_P12_PASSWORD }}
+        run: |
+          echo "$P12_BASE64" | base64 --decode > /tmp/developer_id.p12
+          security create-keychain -p "" build.keychain
+          security default-keychain -s build.keychain
+          security unlock-keychain -p "" build.keychain
+          security import /tmp/developer_id.p12 -k build.keychain -P "$P12_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple: -s -k "" build.keychain
+          rm /tmp/developer_id.p12
+
+      - name: Sign .app
+        run: |
+          SIGN_ID=$(security find-identity -v -p codesigning build.keychain | grep "Developer ID Application" | head -1 | awk '{print $2}')
+          # Sign node binary and .node native addons first, then the bundle
+          codesign --force --sign "$SIGN_ID" --options runtime --timestamp \
+            --entitlements entitlements.plist \
+            "RedactProofAccelerator.app/Contents/Resources/node"
+          find "RedactProofAccelerator.app/Contents/Resources/node_modules" -name "*.node" | while read f; do
+            codesign --force --sign "$SIGN_ID" --options runtime --timestamp "$f"
+          done
+          codesign --force --sign "$SIGN_ID" --options runtime --timestamp \
+            --entitlements entitlements.plist \
+            "RedactProofAccelerator.app"
+
+      - name: Create and sign .dmg
+        env:
+          VERSION: ${{ github.event.inputs.version }}
+        run: |
+          SIGN_ID=$(security find-identity -v -p codesigning build.keychain | grep "Developer ID Application" | head -1 | awk '{print $2}')
+          DMG="RedactProof-Accelerator-arm64-$VERSION.dmg"
+
+          mkdir -p dmg_staging
+          cp -R RedactProofAccelerator.app dmg_staging/
+          ln -s /Applications dmg_staging/Applications
+
+          hdiutil create \
+            -volname "RedactProof Accelerator" \
+            -srcfolder dmg_staging \
+            -ov -format UDZO \
+            "$DMG"
+
+          codesign --sign "$SIGN_ID" --timestamp "$DMG"
+          echo "DMG=$DMG" >> $GITHUB_ENV
+
+      - name: Notarize and staple
+        env:
+          APPLE_API_KEY_P8: ${{ secrets.APPLE_API_KEY_P8 }}
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_KEY_ISSUER_ID: ${{ secrets.APPLE_API_KEY_ISSUER_ID }}
+        run: |
+          echo "$APPLE_API_KEY_P8" > /tmp/api.p8
+          xcrun notarytool submit "$DMG" \
+            --key /tmp/api.p8 \
+            --key-id "$APPLE_API_KEY_ID" \
+            --issuer "$APPLE_API_KEY_ISSUER_ID" \
+            --wait
+          xcrun stapler staple "$DMG"
+          rm /tmp/api.p8
+
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ github.event.inputs.version }}
+        run: |
+          SHA=$(shasum -a 256 "$DMG" | awk '{print $1}')
+          gh release create "accelerator-macos-v${VERSION}" \
+            "$DMG" \
+            --repo RedactProof/accelerator-releases \
+            --title "Accelerator macOS v${VERSION}" \
+            --notes "macOS Apple Silicon installer for RedactProof Accelerator v${VERSION}.
+
+Drag RedactProofAccelerator to Applications, then open it once. It runs silently in the background and starts automatically at login.
+
+SHA-256: \`${SHA}\`"

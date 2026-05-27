@@ -4,3 +4,10 @@ dist/
 build/
 *.exe
 *.msi
+core.bin
+developer_id.key
+developer_id.pem
+developer_id.p12
+developer_id.csr
+developer_id_request.inf
+installer/.node-cache/
