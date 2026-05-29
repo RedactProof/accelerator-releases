@@ -36,22 +36,15 @@ jobs:
       - name: Build installers
         run: pwsh -File installer/build.ps1
 
-      - name: Compute checksums
-        run: |
-          $hashes = @{}
-          foreach ($exe in Get-ChildItem dist -Filter "*.exe") {
-            $hash = (Get-FileHash $exe.FullName -Algorithm SHA256).Hash.ToLower()
-            $hashes[$exe.Name] = $hash
-            Write-Host "$($exe.Name): $hash"
-            "SHA256_$($exe.BaseName.Replace('-','_'))=$hash" | Out-File -Append $env:GITHUB_ENV -Encoding utf8
-          }
-
       - name: Sign installers
-        if: ${{ secrets.WINDOWS_CERT_BASE64 != '' }}
         env:
           WINDOWS_CERT_BASE64: ${{ secrets.WINDOWS_CERT_BASE64 }}
           WINDOWS_CERT_PASSWORD: ${{ secrets.WINDOWS_CERT_PASSWORD }}
         run: |
+          if (-not $env:WINDOWS_CERT_BASE64) {
+            Write-Host "No signing cert configured - skipping (SmartScreen may warn on first run)"
+            exit 0
+          }
           $certBytes = [Convert]::FromBase64String($env:WINDOWS_CERT_BASE64)
           $certPath = "$env:TEMP\cert.pfx"
           [IO.File]::WriteAllBytes($certPath, $certBytes)
@@ -73,7 +66,7 @@ jobs:
             $hash = (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLower()
             "$($_.Name)  SHA-256: ``$hash``"
           }
-          $notes = "Windows installers for RedactProof Accelerator v$env:VERSION.``n``nRun the installer for your architecture: **x64** for Intel/AMD, **arm64** for Snapdragon / Copilot+ PCs.``n``n$($lines -join '``n')"
+          $notes = "Windows installers for RedactProof Accelerator v$env:VERSION.`n`nRun the installer for your architecture: **x64** for Intel/AMD, **arm64** for Snapdragon / Copilot+ PCs.`n`n$($lines -join "`n")"
           gh release create "accelerator-v$env:VERSION" @($exes.FullName) `
             --repo RedactProof/accelerator-releases `
             --title "Accelerator v$env:VERSION" `
@@ -84,7 +77,6 @@ jobs:
           AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
           AWS_DEFAULT_REGION: auto
-          VERSION: ${{ github.event.inputs.version }}
         run: |
           $endpoint = "https://882ca3f6faa2b517bb78178c9f67e38b.r2.cloudflarestorage.com"
           foreach ($exe in Get-ChildItem dist -Filter "*.exe") {
