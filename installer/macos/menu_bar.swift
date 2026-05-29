@@ -7,13 +7,14 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private var healthTimer: Timer?
     private var isConnected = false
     private let bundleID = "com.popsall.redactproof.accelerator"
+    private let loginPrefKey = "rp.loginItemPreferenceSet"
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
         migrateFromLegacy()
         setupStatusItem()
         startServer()
-        registerLoginItem()
+        registerLoginItemIfFirstLaunch()
         scheduleHealthCheck()
     }
 
@@ -25,8 +26,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     // MARK: - Legacy migration
 
     private func migrateFromLegacy() {
-        // Kill any orphaned server.mjs processes from a previous installation
-        // (legacy launcher.sh used nohup and left detached processes running)
+        // Kill any orphaned server.mjs processes from previous installation
         let kill = Process()
         kill.executableURL = URL(fileURLWithPath: "/usr/bin/pkill")
         kill.arguments = ["-f", "server.mjs"]
@@ -151,11 +151,13 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         return false
     }
 
-    private func registerLoginItem() {
+    private func registerLoginItemIfFirstLaunch() {
+        guard !UserDefaults.standard.bool(forKey: loginPrefKey) else { return }
+        // First launch - register and mark preference as set
         if #available(macOS 13.0, *) {
-            let svc = SMAppService.mainApp
-            if svc.status != .enabled { try? svc.register() }
+            try? SMAppService.mainApp.register()
         }
+        UserDefaults.standard.set(true, forKey: loginPrefKey)
     }
 
     @objc private func toggleLogin() {
@@ -164,6 +166,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             if svc.status == .enabled { try? svc.unregister() }
             else                       { try? svc.register()   }
         }
+        // Mark that user has explicitly set a preference - won't be overridden on next launch
+        UserDefaults.standard.set(true, forKey: loginPrefKey)
         rebuildMenu()
     }
 
@@ -216,6 +220,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             try? t.run(); t.waitUntilExit()
             try? FileManager.default.removeItem(at: plist)
         }
+
+        UserDefaults.standard.removeObject(forKey: loginPrefKey)
 
         try? FileManager.default.trashItem(
             at: URL(fileURLWithPath: Bundle.main.bundlePath),
