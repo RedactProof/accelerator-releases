@@ -4,15 +4,15 @@
 
 import { createServer } from 'node:http';
 import { writeFileSync, mkdirSync, existsSync, readFileSync, appendFileSync, statSync, renameSync } from 'node:fs';
-import { homedir } from 'node:os';
+import { homedir, totalmem } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { execSync } from 'node:child_process';
 import { Gliner } from 'gliner/node';
 import { env } from '@xenova/transformers';
 
-// File logging - the installer launches us via wscript.exe with stdout/stderr
-// discarded, so console output goes nowhere. Mirror everything to a log file
-// users can tail to debug bridge crashes / 500s.
+// File logging - the installer launches us with stdout/stderr discarded.
+// Mirror everything to a log file users can share for support.
 const LOG_DIR = join(homedir(), '.redactproof');
 const LOG_PATH = join(LOG_DIR, 'bridge.log');
 const LOG_MAX_BYTES = 1_048_576; // 1MB - rotate to bridge.log.1 on overflow
@@ -36,11 +36,11 @@ const _origErr = console.error.bind(console);
 console.log = (...args) => { _origLog(...args); appendLog('info', args); };
 console.error = (...args) => { _origErr(...args); appendLog('error', args); };
 process.on('uncaughtException', (err) => {
-  appendLog('fatal', ['uncaughtException', err?.stack ?? String(err)]);
+  appendLog('fatal', ['uncaughtException', err?.message ?? String(err)]);
   process.exit(1);
 });
 process.on('unhandledRejection', (err) => {
-  appendLog('fatal', ['unhandledRejection', err?.stack ?? String(err)]);
+  appendLog('fatal', ['unhandledRejection', err?.message ?? String(err)]);
 });
 
 // model-config.json sits next to server.mjs and can override host/repo
@@ -52,19 +52,9 @@ try {
   if (existsSync(p)) fileConfig = JSON.parse(readFileSync(p, 'utf8').replace(/^﻿/, ''));
 } catch {}
 
-// Tokenizer source: by default load from a bundled local dir that is
-// version-locked to core.bin. Hitting HuggingFace live (the previous
-// behaviour) was: (a) observable in network traffic, leaking the model
-// identity against the project's no-model-names rule; (b) brittle - a
-// downstream tokenizer update added a vocab token the shipped core.bin's
-// embedding matrix couldn't index, producing 500s on every /infer; (c) it
-// made the bridge unusable offline. Remote mode is preserved as an opt-in
-// for the swap-model variant-test workflow.
-const TOKENIZER_DIR_NAME = 'tokenizer';
 const useRemote = !!(process.env.RP_MODEL_HOST || fileConfig.host);
-const VARIANT_LABEL = fileConfig.label ?? (useRemote ? 'remote' : 'default');
 const MAX_WIDTH = 12;
-console.log(`[bridge] variant: ${VARIANT_LABEL} mode=${useRemote ? 'remote' : 'local'}`);
+console.log(`[bridge] mode=${useRemote ? 'remote' : 'local'}`);
 
 let tokenizerPath;
 if (useRemote) {
@@ -76,22 +66,14 @@ if (useRemote) {
   env.allowLocalModels = false;
   tokenizerPath = MODEL_REPO;
 } else {
-  const localTokenizerDir = join(__dir, TOKENIZER_DIR_NAME);
+  const localTokenizerDir = join(__dir, 'tokenizer');
   if (!existsSync(localTokenizerDir)) {
-    console.error(`[bridge] tokenizer dir missing at ${localTokenizerDir}`);
-    console.error('[bridge] reinstall the accelerator, or run tools/bridge/scripts/download-tokenizer.ps1 in dev');
+    console.error('[bridge] tokenizer missing - reinstall the accelerator');
     process.exit(1);
   }
-  // transformers resolves localModelPath + tokenizerPath, so localModelPath
-  // points at __dir and tokenizerPath is the subdir name.
   env.localModelPath = __dir;
   env.allowLocalModels = true;
-  // Leave allowRemoteModels at its default (true). Setting it false here
-  // tripped "both local and remote models are disabled" at runtime inside
-  // @xenova/transformers' hub.js even though allowLocalModels was true -
-  // some code paths read the flags before the local-first check kicks in.
-  // Local files satisfy the request first, so remote is never actually hit.
-  tokenizerPath = TOKENIZER_DIR_NAME;
+  tokenizerPath = 'tokenizer';
 }
 env.useFSCache = false;
 env.useBrowserCache = false;
@@ -104,9 +86,6 @@ const gliner = new Gliner({
   },
   maxWidth: MAX_WIDTH,
   modelType: 'span-level',
-  // gliner's constructor unconditionally writes env.allowLocalModels from this
-  // option (default false), clobbering our env mutation above. Without it, a
-  // local-mode bridge silently falls through to HuggingFace at runtime.
   transformersSettings: {
     allowLocalModels: !useRemote,
   },
@@ -116,6 +95,21 @@ console.log('[bridge] initialising...');
 const t0 = Date.now();
 await gliner.initialize();
 console.log(`[bridge] initialised in ${Date.now() - t0}ms`);
+
+// Startup diagnostics - useful for support without exposing PII or model identity
+function sysctl(key) {
+  try { return execSync(`sysctl -n ${key}`, { encoding: 'utf8', timeout: 1000 }).trim(); } catch { return null; }
+}
+function macOSVersion() {
+  try { return execSync('sw_vers -productVersion', { encoding: 'utf8', timeout: 1000 }).trim(); } catch { return null; }
+}
+const chip  = sysctl('machdep.cpu.brand_string') ?? process.arch;
+const ramGB = Math.round(totalmem() / 1_073_741_824);
+const osVer = macOSVersion() ?? 'unknown';
+let modelMB = '?';
+try { modelMB = (statSync(join(__dir, 'core.bin')).size / 1_048_576).toFixed(1); } catch {}
+console.log(`[bridge] system: ${chip} | macOS ${osVer} | ${ramGB}GB RAM`);
+console.log(`[bridge] runtime: node ${process.version} | core.bin ${modelMB}MB`);
 
 const server = createServer(async (req, res) => {
   res.setHeader('Access-Control-Allow-Origin', '*');
@@ -160,8 +154,7 @@ const server = createServer(async (req, res) => {
         res.writeHead(200, { 'Content-Type': 'application/json' })
           .end(JSON.stringify(isBatch ? { batches: mapped, inferenceMs } : { entities: mapped[0], inferenceMs }));
       } catch (err) {
-        const detail = err?.stack ?? String(err?.message ?? err);
-        console.error(`[bridge] ${isBatch ? 'batch' : 'single'} inference failed:`, detail);
+        console.error(`[bridge] ${isBatch ? 'batch' : 'single'} inference failed: ${err?.message ?? String(err)}`);
         res.writeHead(500).end(JSON.stringify({ error: String(err?.message ?? err) }));
       }
     });
@@ -186,7 +179,7 @@ function tryListen(ports, idx = 0) {
       console.log(`[bridge] port ${p} in use, trying next`);
       tryListen(ports, idx + 1);
     } else {
-      console.error(`[bridge] listen error:`, err);
+      console.error(`[bridge] listen error: ${err?.message ?? String(err)}`);
       process.exit(1);
     }
   });
@@ -195,11 +188,8 @@ function tryListen(ports, idx = 0) {
     const dir = join(homedir(), '.redactproof');
     if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
     writeFileSync(join(dir, 'accelerator.json'), JSON.stringify({ port: actual, version: '0.0.1', pid: process.pid }));
-    // PID file in install dir so the NSIS uninstaller can kill us cleanly
-    // without taskkill'ing every node.exe on the system.
     try { writeFileSync(new URL('./bridge.pid', import.meta.url), String(process.pid)); } catch {}
     console.log(`[bridge] listening on http://127.0.0.1:${actual}`);
-    console.log(`[bridge] discovery file: ${join(dir, 'accelerator.json')}`);
   });
 }
 
