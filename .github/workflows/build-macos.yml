@@ -169,7 +169,14 @@ jobs:
           mkdir -p dmg_staging
           cp -R "$APP" dmg_staging/
           ln -s /Applications dmg_staging/Applications
-          hdiutil create -volname "RedactProof Accelerator" -srcfolder dmg_staging -ov -format UDZO "$DMG"
+          # Prevent Spotlight indexing the staging dir, which causes 'Resource busy' on hdiutil
+          touch dmg_staging/.metadata_never_index
+          # Retry up to 3 times in case of transient runner lock
+          for attempt in 1 2 3; do
+            hdiutil create -volname "RedactProof Accelerator" -srcfolder dmg_staging -ov -format UDZO "$DMG" && break
+            echo "hdiutil attempt $attempt failed, retrying in 5s..."
+            sleep 5
+          done
           codesign --sign "$SIGN_ID" --timestamp "$DMG"
           echo "DMG=$DMG" >> $GITHUB_ENV
 
