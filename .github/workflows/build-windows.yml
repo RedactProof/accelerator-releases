@@ -1,0 +1,95 @@
+name: Build Windows Installer
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version (e.g. 0.1.0)'
+        required: true
+
+jobs:
+  build:
+    runs-on: windows-latest
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download core.bin
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release download model-v1 --repo RedactProof/accelerator-releases --pattern "core.bin" --output core.bin
+
+      - name: Install NSIS
+        run: choco install nsis -y --no-progress
+
+      - name: Set version in package.json
+        env:
+          VERSION: ${{ github.event.inputs.version }}
+        run: |
+          $pkg = Get-Content package.json -Raw | ConvertFrom-Json
+          $pkg.version = $env:VERSION
+          $pkg | ConvertTo-Json -Depth 10 | Set-Content package.json -Encoding UTF8
+          Write-Host "Version set to $env:VERSION"
+
+      - name: Build installers
+        run: pwsh -File installer/build.ps1
+
+      - name: Compute checksums
+        run: |
+          $hashes = @{}
+          foreach ($exe in Get-ChildItem dist -Filter "*.exe") {
+            $hash = (Get-FileHash $exe.FullName -Algorithm SHA256).Hash.ToLower()
+            $hashes[$exe.Name] = $hash
+            Write-Host "$($exe.Name): $hash"
+            "SHA256_$($exe.BaseName.Replace('-','_'))=$hash" | Out-File -Append $env:GITHUB_ENV -Encoding utf8
+          }
+
+      - name: Sign installers
+        if: ${{ secrets.WINDOWS_CERT_BASE64 != '' }}
+        env:
+          WINDOWS_CERT_BASE64: ${{ secrets.WINDOWS_CERT_BASE64 }}
+          WINDOWS_CERT_PASSWORD: ${{ secrets.WINDOWS_CERT_PASSWORD }}
+        run: |
+          $certBytes = [Convert]::FromBase64String($env:WINDOWS_CERT_BASE64)
+          $certPath = "$env:TEMP\cert.pfx"
+          [IO.File]::WriteAllBytes($certPath, $certBytes)
+          $signtool = Get-ChildItem -Recurse "C:\Program Files (x86)\Windows Kits\10\bin" -Filter "signtool.exe" -ErrorAction SilentlyContinue | Select-Object -Last 1
+          if (-not $signtool) { throw "signtool.exe not found" }
+          foreach ($exe in Get-ChildItem dist -Filter "*.exe") {
+            & $signtool.FullName sign /f $certPath /p $env:WINDOWS_CERT_PASSWORD /tr http://timestamp.digicert.com /td sha256 /fd sha256 $exe.FullName
+            Write-Host "Signed: $($exe.Name)"
+          }
+          Remove-Item $certPath
+
+      - name: Publish to GitHub releases
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ github.event.inputs.version }}
+        run: |
+          $exes = Get-ChildItem dist -Filter "*.exe"
+          $lines = $exes | ForEach-Object {
+            $hash = (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLower()
+            "$($_.Name)  SHA-256: ``$hash``"
+          }
+          $notes = "Windows installers for RedactProof Accelerator v$env:VERSION.``n``nRun the installer for your architecture: **x64** for Intel/AMD, **arm64** for Snapdragon / Copilot+ PCs.``n``n$($lines -join '``n')"
+          gh release create "accelerator-v$env:VERSION" @($exes.FullName) `
+            --repo RedactProof/accelerator-releases `
+            --title "Accelerator v$env:VERSION" `
+            --notes $notes
+
+      - name: Upload to R2
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: auto
+          VERSION: ${{ github.event.inputs.version }}
+        run: |
+          $endpoint = "https://882ca3f6faa2b517bb78178c9f67e38b.r2.cloudflarestorage.com"
+          foreach ($exe in Get-ChildItem dist -Filter "*.exe") {
+            aws s3 cp $exe.FullName "s3://redactproof-downloads/accelerator/$($exe.Name)" `
+              --endpoint-url $endpoint `
+              --no-progress
+            Write-Host "R2: https://downloads.redactproof.com/accelerator/$($exe.Name)"
+          }
