@@ -120,7 +120,7 @@ const server = createServer(async (req, res) => {
 
   if (req.url === '/health') {
     return res.writeHead(200, { 'Content-Type': 'application/json' })
-      .end(JSON.stringify({ ok: true, app: 'redactproof-bridge', version: '0.0.1' }));
+      .end(JSON.stringify({ ok: true, app: 'redactproof-bridge', version: '0.1.0' }));
   }
 
   if ((req.url === '/infer' || req.url === '/infer/batch') && req.method === 'POST') {
@@ -187,7 +187,7 @@ function tryListen(ports, idx = 0) {
     const actual = server.address().port;
     const dir = join(homedir(), '.redactproof');
     if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
-    writeFileSync(join(dir, 'accelerator.json'), JSON.stringify({ port: actual, version: '0.0.1', pid: process.pid }));
+    writeFileSync(join(dir, 'accelerator.json'), JSON.stringify({ port: actual, version: '0.1.0', pid: process.pid }));
     try { writeFileSync(new URL('./bridge.pid', import.meta.url), String(process.pid)); } catch {}
     console.log(`[bridge] listening on http://127.0.0.1:${actual}`);
   });
