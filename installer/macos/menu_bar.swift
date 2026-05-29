@@ -163,7 +163,24 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     // MARK: - Actions
 
     @objc private func openApp() {
-        NSWorkspace.shared.open(URL(string: "https://app.redactproof.com")!)
+        let url = URL(string: "https://app.redactproof.com")!
+        // Safari blocks localhost connections from HTTPS — prefer Chromium-based browsers
+        let chromiumBundleIDs = [
+            "com.google.Chrome",
+            "com.microsoft.edgemac",
+            "org.chromium.Chromium",
+            "com.brave.Browser",
+            "company.thebrowser.Browser",  // Arc
+        ]
+        for bundleID in chromiumBundleIDs {
+            if let appURL = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleID) {
+                let config = NSWorkspace.OpenConfiguration()
+                NSWorkspace.shared.open([url], withApplicationAt: appURL,
+                                        configuration: config, completionHandler: nil)
+                return
+            }
+        }
+        NSWorkspace.shared.open(url)
     }
 
     @objc private func confirmUninstall() {
