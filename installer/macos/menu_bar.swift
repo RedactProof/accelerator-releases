@@ -26,6 +26,14 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     // MARK: - Legacy migration
 
     private func migrateFromLegacy() {
+        // Terminate any other running instances of this app (e.g. a previous version still open)
+        let currentPID = ProcessInfo.processInfo.processIdentifier
+        let others = NSRunningApplication.runningApplications(withBundleIdentifier: bundleID)
+            .filter { $0.processIdentifier != pid_t(currentPID) }
+        others.forEach { $0.terminate() }
+        if !others.isEmpty { Thread.sleep(forTimeInterval: 0.5) }
+
+        // Kill orphaned server.mjs processes (legacy nohup installs)
         let kill = Process()
         kill.executableURL = URL(fileURLWithPath: "/usr/bin/pkill")
         kill.arguments = ["-f", "server.mjs"]
@@ -65,35 +73,29 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private func rebuildMenu() {
         let menu = NSMenu()
 
-        // Status (non-interactive)
         let s = NSMenuItem(title: isConnected ? "\u{25CF} Connected" : "\u{25CB} Not connected",
                            action: nil, keyEquivalent: "")
         s.isEnabled = false
         menu.addItem(s)
         menu.addItem(.separator())
 
-        // Primary action
         menu.addItem(withTitle: "Open RedactProof", action: #selector(openApp), keyEquivalent: "")
         menu.addItem(.separator())
 
-        // Preference
         let li = NSMenuItem(title: "Start at Login", action: #selector(toggleLogin), keyEquivalent: "")
         li.state = loginEnabled() ? .on : .off
         menu.addItem(li)
         menu.addItem(.separator())
 
-        // Maintenance
-        menu.addItem(withTitle: "Restart Bridge",    action: #selector(restartBridge),    keyEquivalent: "")
-        menu.addItem(withTitle: "View Log",          action: #selector(viewLog),           keyEquivalent: "")
-        menu.addItem(withTitle: "Check for Updates", action: #selector(checkForUpdates),   keyEquivalent: "")
+        menu.addItem(withTitle: "Restart Bridge",    action: #selector(restartBridge),  keyEquivalent: "")
+        menu.addItem(withTitle: "View Log",          action: #selector(viewLog),         keyEquivalent: "")
+        menu.addItem(withTitle: "Check for Updates", action: #selector(checkForUpdates), keyEquivalent: "")
         menu.addItem(.separator())
 
-        // Destructive
         menu.addItem(withTitle: "Uninstall\u{2026}", action: #selector(confirmUninstall), keyEquivalent: "")
-        menu.addItem(withTitle: "Quit",              action: #selector(quit),              keyEquivalent: "q")
+        menu.addItem(withTitle: "Quit",              action: #selector(quit),             keyEquivalent: "q")
         menu.addItem(.separator())
 
-        // Version (non-interactive)
         let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? ""
         let vItem = NSMenuItem(title: "Accelerator v\(version)", action: nil, keyEquivalent: "")
         vItem.isEnabled = false
@@ -112,8 +114,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
               FileManager.default.fileExists(atPath: server.path) else { return }
 
         let proc = Process()
-        proc.executableURL      = node
-        proc.arguments          = [server.path]
+        proc.executableURL       = node
+        proc.arguments           = [server.path]
         proc.currentDirectoryURL = res
         proc.environment = ProcessInfo.processInfo.environment
             .merging(["NODE_ENV": "production"]) { $1 }
@@ -207,7 +209,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc private func checkForUpdates() {
-        // Opens in default browser - GitHub works fine in Safari
         NSWorkspace.shared.open(URL(string: "https://github.com/RedactProof/accelerator-releases/releases")!)
     }
 
