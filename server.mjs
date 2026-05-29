@@ -4,7 +4,7 @@
 
 import { createServer } from 'node:http';
 import { writeFileSync, mkdirSync, existsSync, readFileSync, appendFileSync, statSync, renameSync } from 'node:fs';
-import { homedir, totalmem } from 'node:os';
+import { homedir, totalmem, cpus, release, platform as osPlatform } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { execSync } from 'node:child_process';
@@ -97,18 +97,26 @@ await gliner.initialize();
 console.log(`[bridge] initialised in ${Date.now() - t0}ms`);
 
 // Startup diagnostics - useful for support without exposing PII or model identity
-function sysctl(key) {
-  try { return execSync(`sysctl -n ${key}`, { encoding: 'utf8', timeout: 1000 }).trim(); } catch { return null; }
+function getCPU() {
+  if (process.platform === 'darwin') {
+    try { return execSync('sysctl -n machdep.cpu.brand_string', { encoding: 'utf8', timeout: 1000 }).trim(); } catch {}
+  }
+  return cpus()[0]?.model ?? process.arch;
 }
-function macOSVersion() {
-  try { return execSync('sw_vers -productVersion', { encoding: 'utf8', timeout: 1000 }).trim(); } catch { return null; }
+function getOSVersion() {
+  if (process.platform === 'darwin') {
+    try { return `macOS ${execSync('sw_vers -productVersion', { encoding: 'utf8', timeout: 1000 }).trim()}`; } catch {}
+    return 'macOS (unknown version)';
+  }
+  if (process.platform === 'win32') { return `Windows ${release()}`; }
+  return `${osPlatform()} ${release()}`;
 }
-const chip  = sysctl('machdep.cpu.brand_string') ?? process.arch;
+const chip  = getCPU();
 const ramGB = Math.round(totalmem() / 1_073_741_824);
-const osVer = macOSVersion() ?? 'unknown';
+const osVer = getOSVersion();
 let modelMB = '?';
 try { modelMB = (statSync(join(__dir, 'core.bin')).size / 1_048_576).toFixed(1); } catch {}
-console.log(`[bridge] system: ${chip} | macOS ${osVer} | ${ramGB}GB RAM`);
+console.log(`[bridge] system: ${chip} | ${osVer} | ${ramGB}GB RAM`);
 console.log(`[bridge] runtime: node ${process.version} | core.bin ${modelMB}MB`);
 
 const server = createServer(async (req, res) => {
