@@ -33,7 +33,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         let home = FileManager.default.homeDirectoryForCurrentUser
         let legacyPlist = home.appendingPathComponent("Library/LaunchAgents/\(bundleID).plist")
-        let legacyApp  = URL(fileURLWithPath: "/Applications/RedactProofAccelerator.app")
+        let legacyApp   = URL(fileURLWithPath: "/Applications/RedactProofAccelerator.app")
 
         if FileManager.default.fileExists(atPath: legacyPlist.path) {
             let t = Process()
@@ -65,26 +65,35 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private func rebuildMenu() {
         let menu = NSMenu()
 
+        // Status (non-interactive)
         let s = NSMenuItem(title: isConnected ? "\u{25CF} Connected" : "\u{25CB} Not connected",
                            action: nil, keyEquivalent: "")
         s.isEnabled = false
         menu.addItem(s)
         menu.addItem(.separator())
 
+        // Primary action
         menu.addItem(withTitle: "Open RedactProof", action: #selector(openApp), keyEquivalent: "")
-        menu.addItem(withTitle: "Restart Bridge", action: #selector(restartBridge), keyEquivalent: "r")
         menu.addItem(.separator())
 
-        let li = NSMenuItem(title: "Start at Login",
-                            action: #selector(toggleLogin), keyEquivalent: "")
+        // Preference
+        let li = NSMenuItem(title: "Start at Login", action: #selector(toggleLogin), keyEquivalent: "")
         li.state = loginEnabled() ? .on : .off
         menu.addItem(li)
         menu.addItem(.separator())
 
-        menu.addItem(withTitle: "Uninstall\u{2026}", action: #selector(confirmUninstall), keyEquivalent: "")
-        menu.addItem(withTitle: "Quit", action: #selector(quit), keyEquivalent: "q")
+        // Maintenance
+        menu.addItem(withTitle: "Restart Bridge",    action: #selector(restartBridge),    keyEquivalent: "")
+        menu.addItem(withTitle: "View Log",          action: #selector(viewLog),           keyEquivalent: "")
+        menu.addItem(withTitle: "Check for Updates", action: #selector(checkForUpdates),   keyEquivalent: "")
         menu.addItem(.separator())
 
+        // Destructive
+        menu.addItem(withTitle: "Uninstall\u{2026}", action: #selector(confirmUninstall), keyEquivalent: "")
+        menu.addItem(withTitle: "Quit",              action: #selector(quit),              keyEquivalent: "q")
+        menu.addItem(.separator())
+
+        // Version (non-interactive)
         let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? ""
         let vItem = NSMenuItem(title: "Accelerator v\(version)", action: nil, keyEquivalent: "")
         vItem.isEnabled = false
@@ -103,17 +112,13 @@ class AppDelegate: NSObject, NSApplicationDelegate {
               FileManager.default.fileExists(atPath: server.path) else { return }
 
         let proc = Process()
-        proc.executableURL = node
-        proc.arguments     = [server.path]
+        proc.executableURL      = node
+        proc.arguments          = [server.path]
         proc.currentDirectoryURL = res
         proc.environment = ProcessInfo.processInfo.environment
             .merging(["NODE_ENV": "production"]) { $1 }
 
-        let logDir = FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent(".redactproof")
-        try? FileManager.default.createDirectory(at: logDir,
-                                                  withIntermediateDirectories: true)
-        let logURL = logDir.appendingPathComponent("bridge.log")
+        let logURL = bridgeLogURL()
         FileManager.default.createFile(atPath: logURL.path, contents: nil)
         if let fh = try? FileHandle(forWritingTo: logURL) {
             proc.standardOutput = fh
@@ -122,6 +127,13 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         try? proc.run()
         serverProcess = proc
+    }
+
+    private func bridgeLogURL() -> URL {
+        let logDir = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".redactproof")
+        try? FileManager.default.createDirectory(at: logDir, withIntermediateDirectories: true)
+        return logDir.appendingPathComponent("bridge.log")
     }
 
     private func scheduleHealthCheck() {
@@ -151,9 +163,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     // MARK: - Login item
 
     private func loginEnabled() -> Bool {
-        if #available(macOS 13.0, *) {
-            return SMAppService.mainApp.status == .enabled
-        }
+        if #available(macOS 13.0, *) { return SMAppService.mainApp.status == .enabled }
         return false
     }
 
@@ -166,8 +176,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     @objc private func toggleLogin() {
         if #available(macOS 13.0, *) {
             let svc = SMAppService.mainApp
-            if svc.status == .enabled { try? svc.unregister() }
-            else                       { try? svc.register()   }
+            if svc.status == .enabled { try? svc.unregister() } else { try? svc.register() }
         }
         UserDefaults.standard.set(true, forKey: loginPrefKey)
         rebuildMenu()
@@ -176,23 +185,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     // MARK: - Actions
 
     @objc private func openApp() {
-        let url = URL(string: "https://app.redactproof.com")!
-        let chromiumBundleIDs = [
-            "com.google.Chrome",
-            "com.microsoft.edgemac",
-            "org.chromium.Chromium",
-            "com.brave.Browser",
-            "company.thebrowser.Browser",
-        ]
-        for id in chromiumBundleIDs {
-            if let appURL = NSWorkspace.shared.urlForApplication(withBundleIdentifier: id) {
-                let config = NSWorkspace.OpenConfiguration()
-                NSWorkspace.shared.open([url], withApplicationAt: appURL,
-                                        configuration: config, completionHandler: nil)
-                return
-            }
-        }
-        NSWorkspace.shared.open(url)
+        openInChromiumOrDefault(URL(string: "https://app.redactproof.com")!)
     }
 
     @objc private func restartBridge() {
@@ -203,6 +196,37 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.75) { [weak self] in
             self?.startServer()
         }
+    }
+
+    @objc private func viewLog() {
+        let logURL = bridgeLogURL()
+        if !FileManager.default.fileExists(atPath: logURL.path) {
+            FileManager.default.createFile(atPath: logURL.path, contents: nil)
+        }
+        NSWorkspace.shared.open(logURL)
+    }
+
+    @objc private func checkForUpdates() {
+        // Opens in default browser - GitHub works fine in Safari
+        NSWorkspace.shared.open(URL(string: "https://github.com/RedactProof/accelerator-releases/releases")!)
+    }
+
+    private func openInChromiumOrDefault(_ url: URL) {
+        let chromiumBundleIDs = [
+            "com.google.Chrome",
+            "com.microsoft.edgemac",
+            "org.chromium.Chromium",
+            "com.brave.Browser",
+            "company.thebrowser.Browser",
+        ]
+        for id in chromiumBundleIDs {
+            if let appURL = NSWorkspace.shared.urlForApplication(withBundleIdentifier: id) {
+                NSWorkspace.shared.open([url], withApplicationAt: appURL,
+                                        configuration: .init(), completionHandler: nil)
+                return
+            }
+        }
+        NSWorkspace.shared.open(url)
     }
 
     @objc private func confirmUninstall() {
