@@ -59,7 +59,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private func rebuildMenu() {
         let menu = NSMenu()
 
-        let s = NSMenuItem(title: isConnected ? "● Connected" : "○ Not connected",
+        let s = NSMenuItem(title: isConnected ? "\u{25CF} Connected" : "\u{25CB} Not connected",
                            action: nil, keyEquivalent: "")
         s.isEnabled = false
         menu.addItem(s)
@@ -119,7 +119,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func checkHealth() {
-        // Read port from config file written by server.mjs
         let configURL = FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent("Library/Application Support/RedactProof/accelerator.json")
         var port = 47821
@@ -140,21 +139,21 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func loginEnabled() -> Bool {
         if #available(macOS 13.0, *) {
-            return SMAppService.mainApp().status == .enabled
+            return SMAppService.mainApp.status == .enabled
         }
         return false
     }
 
     private func registerLoginItem() {
         if #available(macOS 13.0, *) {
-            let svc = SMAppService.mainApp()
+            let svc = SMAppService.mainApp
             if svc.status != .enabled { try? svc.register() }
         }
     }
 
     @objc private func toggleLogin() {
         if #available(macOS 13.0, *) {
-            let svc = SMAppService.mainApp()
+            let svc = SMAppService.mainApp
             if svc.status == .enabled { try? svc.unregister() }
             else                       { try? svc.register()   }
         }
@@ -182,9 +181,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         healthTimer?.invalidate()
         serverProcess?.terminate()
 
-        if #available(macOS 13.0, *) { try? SMAppService.mainApp().unregister() }
+        if #available(macOS 13.0, *) { try? SMAppService.mainApp.unregister() }
 
-        // Belt-and-suspenders: remove any legacy LaunchAgent
         let plist = FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent("Library/LaunchAgents/\(bundleID).plist")
         if FileManager.default.fileExists(atPath: plist.path) {
@@ -195,7 +193,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             try? FileManager.default.removeItem(at: plist)
         }
 
-        // Move this bundle to Trash
         try? FileManager.default.trashItem(
             at: URL(fileURLWithPath: Bundle.main.bundlePath),
             resultingItemURL: nil)
