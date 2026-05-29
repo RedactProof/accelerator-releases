@@ -26,7 +26,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     // MARK: - Legacy migration
 
     private func migrateFromLegacy() {
-        // Kill any orphaned server.mjs processes from previous installation
         let kill = Process()
         kill.executableURL = URL(fileURLWithPath: "/usr/bin/pkill")
         kill.arguments = ["-f", "server.mjs"]
@@ -73,6 +72,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         menu.addItem(.separator())
 
         menu.addItem(withTitle: "Open RedactProof", action: #selector(openApp), keyEquivalent: "")
+        menu.addItem(withTitle: "Restart Bridge", action: #selector(restartBridge), keyEquivalent: "r")
         menu.addItem(.separator())
 
         let li = NSMenuItem(title: "Start at Login",
@@ -83,6 +83,12 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         menu.addItem(withTitle: "Uninstall\u{2026}", action: #selector(confirmUninstall), keyEquivalent: "")
         menu.addItem(withTitle: "Quit", action: #selector(quit), keyEquivalent: "q")
+        menu.addItem(.separator())
+
+        let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? ""
+        let vItem = NSMenuItem(title: "Accelerator v\(version)", action: nil, keyEquivalent: "")
+        vItem.isEnabled = false
+        menu.addItem(vItem)
 
         statusItem.menu = menu
     }
@@ -142,7 +148,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }.resume()
     }
 
-    // MARK: - Login item (SMAppService, macOS 13+)
+    // MARK: - Login item
 
     private func loginEnabled() -> Bool {
         if #available(macOS 13.0, *) {
@@ -153,10 +159,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func registerLoginItemIfFirstLaunch() {
         guard !UserDefaults.standard.bool(forKey: loginPrefKey) else { return }
-        // First launch - register and mark preference as set
-        if #available(macOS 13.0, *) {
-            try? SMAppService.mainApp.register()
-        }
+        if #available(macOS 13.0, *) { try? SMAppService.mainApp.register() }
         UserDefaults.standard.set(true, forKey: loginPrefKey)
     }
 
@@ -166,7 +169,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             if svc.status == .enabled { try? svc.unregister() }
             else                       { try? svc.register()   }
         }
-        // Mark that user has explicitly set a preference - won't be overridden on next launch
         UserDefaults.standard.set(true, forKey: loginPrefKey)
         rebuildMenu()
     }
@@ -175,16 +177,15 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func openApp() {
         let url = URL(string: "https://app.redactproof.com")!
-        // Safari blocks localhost connections from HTTPS - prefer Chromium-based browsers
         let chromiumBundleIDs = [
             "com.google.Chrome",
             "com.microsoft.edgemac",
             "org.chromium.Chromium",
             "com.brave.Browser",
-            "company.thebrowser.Browser",  // Arc
+            "company.thebrowser.Browser",
         ]
-        for bundleID in chromiumBundleIDs {
-            if let appURL = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleID) {
+        for id in chromiumBundleIDs {
+            if let appURL = NSWorkspace.shared.urlForApplication(withBundleIdentifier: id) {
                 let config = NSWorkspace.OpenConfiguration()
                 NSWorkspace.shared.open([url], withApplicationAt: appURL,
                                         configuration: config, completionHandler: nil)
@@ -192,6 +193,16 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             }
         }
         NSWorkspace.shared.open(url)
+    }
+
+    @objc private func restartBridge() {
+        serverProcess?.terminate()
+        serverProcess = nil
+        isConnected = false
+        rebuildMenu()
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.75) { [weak self] in
+            self?.startServer()
+        }
     }
 
     @objc private func confirmUninstall() {
@@ -208,7 +219,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private func performUninstall() {
         healthTimer?.invalidate()
         serverProcess?.terminate()
-
         if #available(macOS 13.0, *) { try? SMAppService.mainApp.unregister() }
 
         let plist = FileManager.default.homeDirectoryForCurrentUser
@@ -222,11 +232,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         UserDefaults.standard.removeObject(forKey: loginPrefKey)
-
         try? FileManager.default.trashItem(
             at: URL(fileURLWithPath: Bundle.main.bundlePath),
             resultingItemURL: nil)
-
         NSApp.terminate(nil)
     }
 
