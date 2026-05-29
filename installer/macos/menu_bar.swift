@@ -25,6 +25,13 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     // MARK: - Legacy migration
 
     private func migrateFromLegacy() {
+        // Kill any orphaned server.mjs processes from a previous installation
+        // (legacy launcher.sh used nohup and left detached processes running)
+        let kill = Process()
+        kill.executableURL = URL(fileURLWithPath: "/usr/bin/pkill")
+        kill.arguments = ["-f", "server.mjs"]
+        try? kill.run(); kill.waitUntilExit()
+
         let home = FileManager.default.homeDirectoryForCurrentUser
         let legacyPlist = home.appendingPathComponent("Library/LaunchAgents/\(bundleID).plist")
         let legacyApp  = URL(fileURLWithPath: "/Applications/RedactProofAccelerator.app")
@@ -164,7 +171,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func openApp() {
         let url = URL(string: "https://app.redactproof.com")!
-        // Safari blocks localhost connections from HTTPS — prefer Chromium-based browsers
+        // Safari blocks localhost connections from HTTPS - prefer Chromium-based browsers
         let chromiumBundleIDs = [
             "com.google.Chrome",
             "com.microsoft.edgemac",
