@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: 'Version (e.g. 0.0.10)'
+        description: 'Version (e.g. 0.0.11)'
         required: true
 
 jobs:
@@ -45,9 +45,7 @@ jobs:
             sips -z $((size*2)) $((size*2)) installer/assets/logo-source.png --out AppIcon.iconset/icon_${size}x${size}@2x.png >/dev/null
           done
           iconutil -c icns AppIcon.iconset -o AppIcon.icns
-          echo "AppIcon.icns: $(wc -c < AppIcon.icns) bytes"
           sips -z 18 18 installer/assets/logo-source.png --out MenuBarTemplate.png >/dev/null
-          echo "MenuBarTemplate.png: $(wc -c < MenuBarTemplate.png) bytes"
 
       - name: Compile menu bar app
         run: |
@@ -58,7 +56,6 @@ jobs:
             -O \
             installer/macos/menu_bar.swift \
             -o RedactProofAccelerator
-          echo "Binary: $(wc -c < RedactProofAccelerator) bytes"
 
       - name: npm install
         working-directory: payload
@@ -202,14 +199,27 @@ jobs:
           fi
           xcrun stapler staple "$DMG"
 
-      - name: Create GitHub release
+      - name: Publish to GitHub releases
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           VERSION: ${{ github.event.inputs.version }}
         run: |
           SHA=$(shasum -a 256 "$DMG" | awk '{print $1}')
+          echo "SHA256=$SHA" >> $GITHUB_ENV
           NOTES=$(printf 'macOS Apple Silicon installer for RedactProof Accelerator v%s.\n\nDrag RedactProof Accelerator to Applications, then open it once.\n\nSHA-256: `%s`' "$VERSION" "$SHA")
           gh release create "accelerator-macos-v${VERSION}" "$DMG" \
             --repo RedactProof/accelerator-releases \
             --title "Accelerator macOS v${VERSION}" \
             --notes "$NOTES"
+
+      - name: Upload to R2
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: auto
+        run: |
+          aws s3 cp "$DMG" "s3://redactproof-downloads/accelerator/$DMG" \
+            --endpoint-url "https://882ca3f6faa2b517bb78178c9f67e38b.r2.cloudflarestorage.com" \
+            --no-progress
+          echo "R2: https://downloads.redactproof.com/accelerator/$DMG"
+          echo "SHA-256: $SHA256"
