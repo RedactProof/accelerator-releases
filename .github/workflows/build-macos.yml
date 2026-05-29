@@ -37,6 +37,16 @@ jobs:
           cp package.json payload/
           cp -r tokenizer payload/
 
+      - name: Generate app icon
+        run: |
+          mkdir -p AppIcon.iconset
+          for size in 16 32 128 256 512; do
+            sips -z $size $size installer/assets/logo-source.png --out AppIcon.iconset/icon_${size}x${size}.png >/dev/null
+            sips -z $((size*2)) $((size*2)) installer/assets/logo-source.png --out AppIcon.iconset/icon_${size}x${size}@2x.png >/dev/null
+          done
+          iconutil -c icns AppIcon.iconset -o AppIcon.icns
+          echo "Generated AppIcon.icns ($(wc -c < AppIcon.icns) bytes)"
+
       - name: npm install
         working-directory: payload
         run: npm install --omit=dev --no-audit --no-fund
@@ -66,7 +76,6 @@ jobs:
             printf 'module.exports=function(){throw new Error("sharp stub");};module.exports.default=module.exports;' > "$dir/index.js"
           done
           find payload/node_modules -type d -name '@img' -exec rm -rf {} + 2>/dev/null || true
-          # Strip non-darwin-arm64 prebuilds from all packages (bare-fs, bare-os, bare-url, etc.)
           find payload/node_modules -name 'prebuilds' -type d | while IFS= read -r prebuild_dir; do
             find "$prebuild_dir" -mindepth 1 -maxdepth 1 -type d | while IFS= read -r sub; do
               if [ "$(basename "$sub")" != "darwin-arm64" ]; then rm -rf "$sub"; echo "pruned: $sub"; fi
@@ -77,7 +86,9 @@ jobs:
         env:
           VERSION: ${{ github.event.inputs.version }}
         run: |
-          APP="RedactProofAccelerator.app"
+          APP="RedactProof Accelerator.app"
+          echo "APP=RedactProof Accelerator.app" >> "$GITHUB_ENV"
+
           mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 
           cp payload/node              "$APP/Contents/Resources/node"
@@ -85,8 +96,8 @@ jobs:
           cp payload/core.bin          "$APP/Contents/Resources/core.bin"
           cp -r payload/tokenizer      "$APP/Contents/Resources/tokenizer"
           cp -r payload/node_modules   "$APP/Contents/Resources/node_modules"
+          cp AppIcon.icns              "$APP/Contents/Resources/AppIcon.icns"
 
-          # Belt-and-suspenders: prune non-darwin-arm64 prebuilds from app bundle
           find "$APP/Contents/Resources/node_modules" -name 'prebuilds' -type d | while IFS= read -r prebuild_dir; do
             find "$prebuild_dir" -mindepth 1 -maxdepth 1 -type d | while IFS= read -r sub; do
               if [ "$(basename "$sub")" != "darwin-arm64" ]; then rm -rf "$sub"; echo "pruned from bundle: $sub"; fi
@@ -103,11 +114,9 @@ jobs:
           DEVELOPER_ID_KEY: ${{ secrets.DEVELOPER_ID_KEY }}
           DEVELOPER_ID_CERT: ${{ secrets.DEVELOPER_ID_CERT }}
         run: |
-          # Write PEMs from secrets
           printf '%s' "$DEVELOPER_ID_KEY"  > /tmp/dev_id.key
           printf '%s' "$DEVELOPER_ID_CERT" > /tmp/dev_id.crt
 
-          # Create .p12 on macOS using LibreSSL with a throwaway password
           TEMP_PASS=$(openssl rand -hex 16)
           openssl pkcs12 -export \
             -inkey /tmp/dev_id.key \
@@ -115,11 +124,9 @@ jobs:
             -out   /tmp/developer_id.p12 \
             -passout pass:"$TEMP_PASS"
 
-          # Install Apple Developer ID intermediate so chain is complete
           curl -fsSL https://www.apple.com/certificateauthority/DeveloperIDG2CA.cer -o /tmp/DeveloperIDG2CA.cer
           security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keychain /tmp/DeveloperIDG2CA.cer 2>/dev/null || true
 
-          # Import into a fresh keychain
           security create-keychain -p "" build.keychain
           security default-keychain -s build.keychain
           security unlock-keychain -p "" build.keychain
@@ -131,19 +138,16 @@ jobs:
       - name: Sign .app
         run: |
           SIGN_ID=$(security find-identity -v -p codesigning build.keychain | grep "Developer ID Application" | head -1 | awk '{print $2}')
-          # Sign all Mach-O binaries inside the bundle (.node, .dylib, .bare, etc.)
-          find "RedactProofAccelerator.app" \( -name "*.node" -o -name "*.dylib" -o -name "*.so" -o -name "*.bare" \) | while read f; do
+          find "$APP" \( -name "*.node" -o -name "*.dylib" -o -name "*.so" -o -name "*.bare" \) | while read f; do
             codesign --force --sign "$SIGN_ID" --options runtime --timestamp "$f" 2>/dev/null || true
           done
-          # Sign the node binary with entitlements
           codesign --force --sign "$SIGN_ID" --options runtime --timestamp \
             --entitlements installer/macos/entitlements.plist \
-            "RedactProofAccelerator.app/Contents/Resources/node"
-          # Sign the bundle last
+            "$APP/Contents/Resources/node"
           codesign --force --sign "$SIGN_ID" --options runtime --timestamp \
             --entitlements installer/macos/entitlements.plist \
-            "RedactProofAccelerator.app"
-          codesign --verify --deep --strict "RedactProofAccelerator.app"
+            "$APP"
+          codesign --verify --deep --strict "$APP"
 
       - name: Create and sign .dmg
         env:
@@ -152,7 +156,7 @@ jobs:
           SIGN_ID=$(security find-identity -v -p codesigning build.keychain | grep "Developer ID Application" | head -1 | awk '{print $2}')
           DMG="RedactProof-Accelerator-arm64-${VERSION}.dmg"
           mkdir -p dmg_staging
-          cp -R RedactProofAccelerator.app dmg_staging/
+          cp -R "$APP" dmg_staging/
           ln -s /Applications dmg_staging/Applications
           hdiutil create -volname "RedactProof Accelerator" -srcfolder dmg_staging -ov -format UDZO "$DMG"
           codesign --sign "$SIGN_ID" --timestamp "$DMG"
@@ -173,7 +177,6 @@ jobs:
           echo "$SUBMIT"
           SUBMISSION_ID=$(echo "$SUBMIT" | python3 -c "import sys,json; print(json.load(sys.stdin)['id'])")
           STATUS=$(echo "$SUBMIT" | python3 -c "import sys,json; print(json.load(sys.stdin)['status'])")
-          # Always fetch the full log so failures are diagnosable
           xcrun notarytool log "$SUBMISSION_ID" \
             --key /tmp/api.p8 \
             --key-id "$APPLE_API_KEY_ID" \
@@ -191,7 +194,7 @@ jobs:
           VERSION: ${{ github.event.inputs.version }}
         run: |
           SHA=$(shasum -a 256 "$DMG" | awk '{print $1}')
-          NOTES=$(printf 'macOS Apple Silicon installer for RedactProof Accelerator v%s.\n\nDrag RedactProofAccelerator to Applications, then open it once. Runs silently in the background and starts automatically at login.\n\nSHA-256: `%s`' "$VERSION" "$SHA")
+          NOTES=$(printf 'macOS Apple Silicon installer for RedactProof Accelerator v%s.\n\nDrag RedactProof Accelerator to Applications, then open it once. Runs silently in the background and starts automatically at login.\n\nSHA-256: `%s`' "$VERSION" "$SHA")
           gh release create "accelerator-macos-v${VERSION}" "$DMG" \
             --repo RedactProof/accelerator-releases \
             --title "Accelerator macOS v${VERSION}" \
