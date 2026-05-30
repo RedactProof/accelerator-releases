@@ -95,7 +95,7 @@ Section "Install"
   SetRegView default
 
   ; Stop any existing instance before overwriting files.
-  nsExec::Exec 'cmd /c "if exist "$INSTDIR\bridge.pid" (for /f %i in ($INSTDIR\bridge.pid) do taskkill /F /PID %i)"'
+  nsExec::Exec 'cmd /c "if exist "$INSTDIR\bridge.pid" (for /f "usebackq" %i in ("$INSTDIR\bridge.pid") do taskkill /F /PID %i)"'
 
   ; ===== Step 1: Write the uninstaller binary FIRST =====
   ; If anything later fails, the user still has a working Uninstall.exe and a
@@ -194,7 +194,7 @@ Section "Uninstall"
   SetRegView default
 
   ; Stop running bridge if any.
-  nsExec::Exec 'cmd /c "if exist "$INSTDIR\bridge.pid" (for /f %i in ($INSTDIR\bridge.pid) do taskkill /F /PID %i)"'
+  nsExec::Exec 'cmd /c "if exist "$INSTDIR\bridge.pid" (for /f "usebackq" %i in ("$INSTDIR\bridge.pid") do taskkill /F /PID %i)"'
   Sleep 500
 
   ; Remove autostart and scheduled task.
