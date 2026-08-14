@@ -52,6 +52,21 @@ process.on('unhandledRejection', (err) => {
 // model-config.json sits next to server.mjs and can override host/repo
 // without env vars. Used by the variant-test workflow (swap-model.ps1).
 const __dir = dirname(fileURLToPath(import.meta.url));
+
+// Single source of truth for the version. It was hardcoded in two string
+// literals below AND declared in package.json, so a release could easily
+// ship a bridge advertising the wrong version - and the web app compares
+// /health's version against the latest release to decide whether to offer
+// an update, so drift there breaks update prompts. package.json is bundled
+// next to server.mjs by build.ps1; the fallback only matters if that ever
+// stops being true.
+let APP_VERSION = '0.0.0';
+try {
+  APP_VERSION = JSON.parse(
+    readFileSync(join(__dir, 'package.json'), 'utf8').replace(/^﻿/, ''),
+  ).version || APP_VERSION;
+} catch {}
+
 let fileConfig = {};
 try {
   const p = join(__dir, 'model-config.json');
@@ -171,7 +186,7 @@ const server = createServer(async (req, res) => {
 
   if (req.url === '/health') {
     return res.writeHead(200, { 'Content-Type': 'application/json' })
-      .end(JSON.stringify({ ok: true, app: 'redactproof-bridge', version: '0.1.1' }));
+      .end(JSON.stringify({ ok: true, app: 'redactproof-bridge', version: APP_VERSION }));
   }
 
   if ((req.url === '/infer' || req.url === '/infer/batch') && req.method === 'POST') {
@@ -287,7 +302,7 @@ function tryListen(ports, idx = 0) {
     const dir = join(homedir(), '.redactproof');
     try {
       if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
-      writeFileSync(join(dir, 'accelerator.json'), JSON.stringify({ port: actual, version: '0.1.1', pid: process.pid }));
+      writeFileSync(join(dir, 'accelerator.json'), JSON.stringify({ port: actual, version: APP_VERSION, pid: process.pid }));
     } catch (err) {
       // The app discovers us by reading this file; if it can't be written the
       // bridge is unusable. Exit loudly rather than run undiscoverable.
