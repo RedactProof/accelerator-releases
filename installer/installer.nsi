@@ -94,8 +94,18 @@ Section "Install"
   SetOutPath "$INSTDIR"
   SetRegView default
 
-  ; Stop any existing instance before overwriting files.
+  ; Stop any existing instance before overwriting files. Three layers, because
+  ; the pid file alone proved unreliable (stale pid -> node.exe stays locked ->
+  ; "Error opening file for writing: node.exe" mid-extract):
+  ;   1. End the scheduled task so it can't relaunch mid-install.
+  ;   2. Kill the pid recorded in bridge.pid (fast path).
+  ;   3. Path-filtered kill of any node.exe running from $INSTDIR (catches a
+  ;      stale/missing pid file without touching unrelated Node processes).
+  nsExec::Exec 'schtasks /End /TN "${APP_ID}"'
   nsExec::Exec 'cmd /c "if exist "$INSTDIR\bridge.pid" (for /f "usebackq" %i in ("$INSTDIR\bridge.pid") do taskkill /F /PID %i)"'
+  nsExec::Exec `powershell -NoProfile -Command "Get-Process node -ErrorAction SilentlyContinue | Where-Object { $$_.Path -eq '$INSTDIR\node.exe' } | Stop-Process -Force"`
+  ; Give the OS a moment to release file handles before extraction.
+  Sleep 800
 
   ; ===== Step 1: Write the uninstaller binary FIRST =====
   ; If anything later fails, the user still has a working Uninstall.exe and a
@@ -193,8 +203,11 @@ SectionEnd
 Section "Uninstall"
   SetRegView default
 
-  ; Stop running bridge if any.
+  ; Stop running bridge if any (same three layers as install).
+  nsExec::Exec 'schtasks /End /TN "${APP_ID}"'
   nsExec::Exec 'cmd /c "if exist "$INSTDIR\bridge.pid" (for /f "usebackq" %i in ("$INSTDIR\bridge.pid") do taskkill /F /PID %i)"'
+  nsExec::Exec `powershell -NoProfile -Command "Get-Process node -ErrorAction SilentlyContinue | Where-Object { $$_.Path -eq '$INSTDIR\node.exe' } | Stop-Process -Force"`
+  Sleep 800
   Sleep 500
 
   ; Remove autostart and scheduled task.
