@@ -161,8 +161,21 @@ Section "Install"
   ; under its own session, completely outside the browser's Job Object.
   ; Empty <Triggers/> means no automatic trigger — only schtasks /Run fires it.
   ; MultipleInstancesPolicy=IgnoreNew prevents duplicate bridges on double-click.
+  ;
+  ; NO encoding attribute on the XML declaration. NSIS FileWrite emits ANSI
+  ; bytes with no BOM; declaring encoding="UTF-8" made schtasks reject the
+  ; file outright:
+  ;     ERROR: The task XML is malformed.
+  ;     (1,40)::ERROR: unable to switch the encoding
+  ; ExecToLog never checked the exit code, so the failure was silent: the
+  ; task was NEVER created, the redactproof:// handler below pointed at a
+  ; task that did not exist, and "Start Accelerator" did nothing on every
+  ; Windows install. It only ever appeared to work because Step 7 launches
+  ; the bridge directly right after installing. Omitting the attribute (or
+  ; writing UTF-16LE with encoding="UTF-16") both import cleanly - verified
+  ; against schtasks on Windows 11, 2026-08-14.
   FileOpen $0 "$INSTDIR\task.xml" w
-  FileWrite $0 '<?xml version="1.0" encoding="UTF-8"?>$\r$\n'
+  FileWrite $0 '<?xml version="1.0"?>$\r$\n'
   FileWrite $0 '<Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">$\r$\n'
   FileWrite $0 '  <RegistrationInfo><Description>RedactProof Accelerator bridge</Description></RegistrationInfo>$\r$\n'
   FileWrite $0 '  <Triggers/>$\r$\n'
@@ -182,14 +195,28 @@ Section "Install"
   FileWrite $0 '</Task>$\r$\n'
   FileClose $0
   nsExec::ExecToLog 'schtasks /Create /XML "$INSTDIR\task.xml" /TN "${APP_ID}" /F'
+  Pop $1   ; exit code — 0 on success
   Delete "$INSTDIR\task.xml"
 
   ; ===== Step 6: Register redactproof:// URL scheme =====
   ; schtasks /Run posts to the Scheduler service and returns immediately — safe
-  ; to call from inside Chrome/Edge's Job Object.
+  ; to call from inside Chrome/Edge's Job Object, which is the whole reason the
+  ; task exists: a bridge started directly by the browser's protocol handler
+  ; inherits the browser's Job Object and dies with it.
+  ;
+  ; If the task could not be created, DON'T register a handler that points at
+  ; it — that is a link which can only ever fail. Fall back to launching the
+  ; script directly: the bridge then shares the browser's Job Object lifetime
+  ; (it stops when the browser closes), which is degraded but far better than
+  ; a "Start Accelerator" link that does nothing.
   WriteRegStr HKCU "Software\Classes\redactproof" "" "URL:RedactProof Accelerator"
   WriteRegStr HKCU "Software\Classes\redactproof" "URL Protocol" ""
-  WriteRegStr HKCU "Software\Classes\redactproof\shell\open\command" "" 'schtasks.exe /Run /TN "${APP_ID}"'
+  ${If} $1 == 0
+    WriteRegStr HKCU "Software\Classes\redactproof\shell\open\command" "" 'schtasks.exe /Run /TN "${APP_ID}"'
+  ${Else}
+    DetailPrint "Scheduled task registration failed (code $1) - falling back to direct launch for redactproof://"
+    WriteRegStr HKCU "Software\Classes\redactproof\shell\open\command" "" '"wscript.exe" "$INSTDIR\start-bridge.vbs"'
+  ${EndIf}
 
   ; ===== Step 7: Launch immediately =====
   Exec '"wscript.exe" "$INSTDIR\start-bridge.vbs"'
