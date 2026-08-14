@@ -157,6 +157,20 @@ function Build-Arch($arch) {
     Get-ChildItem -Path $payloadDir -Recurse -Directory -Filter '@img' -ErrorAction SilentlyContinue |
         ForEach-Object { Remove-Item -Recurse -Force $_.FullName }
 
+    # Branded launcher stub, compiled INTO the payload so it installs
+    # alongside start-bridge.vbs. It is the redactproof:// handler target:
+    # pointing the scheme straight at schtasks.exe made the browser prompt
+    # read "Open Task Scheduler Configuration Tool?", which looks like
+    # malware. The stub carries our own FileDescription, so the prompt names
+    # RedactProof instead. Architecture-independent (it only shells out), but
+    # built per-arch payload for simplicity.
+    Write-Host "[nsis] compiling branded launcher stub"
+    $launcherNsi = Join-Path $scriptRoot 'launcher.nsi'
+    $launcherOut = Join-Path $payloadDir 'LaunchAccelerator.exe'
+    & cmd /c "`"$makensis`" /DAPP_VERSION=$APP_VERSION `"/DOUT_FILE=$launcherOut`" `"$launcherNsi`" 2>&1" | Out-Host
+    if ($LASTEXITCODE -ne 0) { throw "makensis failed for launcher stub" }
+    if (-not (Test-Path $launcherOut)) { throw "launcher stub not produced: $launcherOut" }
+
     Write-Host "[nsis] compiling installer for $arch"
     $nsiPath = Join-Path $scriptRoot 'installer.nsi'
     & cmd /c "`"$makensis`" /DARCH=$arch /DAPP_VERSION=$APP_VERSION `"$nsiPath`" 2>&1" | Out-Host

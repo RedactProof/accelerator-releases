@@ -199,24 +199,30 @@ Section "Install"
   Delete "$INSTDIR\task.xml"
 
   ; ===== Step 6: Register redactproof:// URL scheme =====
-  ; schtasks /Run posts to the Scheduler service and returns immediately — safe
-  ; to call from inside Chrome/Edge's Job Object, which is the whole reason the
-  ; task exists: a bridge started directly by the browser's protocol handler
-  ; inherits the browser's Job Object and dies with it.
+  ; The handler points at our own bundled LaunchAccelerator.exe rather than
+  ; straight at schtasks.exe. Both start the bridge via the scheduled task
+  ; (schtasks posts an RPC to the Scheduler service and exits, so the bridge
+  ; runs outside the browser's Job Object and survives the tab closing) — but
+  ; the browser's "wants to open this application" prompt names the TARGET
+  ; executable. With schtasks as the target it read
+  ;   "Open Task Scheduler Configuration Tool?"
+  ; which is schtasks.exe's own Windows file description and reads like
+  ; malware to anyone sensible. The stub carries FileDescription="RedactProof
+  ; Accelerator", so the prompt names us.
   ;
-  ; If the task could not be created, DON'T register a handler that points at
-  ; it — that is a link which can only ever fail. Fall back to launching the
-  ; script directly: the bridge then shares the browser's Job Object lifetime
-  ; (it stops when the browser closes), which is degraded but far better than
-  ; a "Start Accelerator" link that does nothing.
+  ; The stub also falls back to start-bridge.vbs by itself when the task is
+  ; missing, so a launch link can't be a dead end.
   WriteRegStr HKCU "Software\Classes\redactproof" "" "URL:RedactProof Accelerator"
   WriteRegStr HKCU "Software\Classes\redactproof" "URL Protocol" ""
-  ${If} $1 == 0
-    WriteRegStr HKCU "Software\Classes\redactproof\shell\open\command" "" 'schtasks.exe /Run /TN "${APP_ID}"'
-  ${Else}
-    DetailPrint "Scheduled task registration failed (code $1) - falling back to direct launch for redactproof://"
-    WriteRegStr HKCU "Software\Classes\redactproof\shell\open\command" "" '"wscript.exe" "$INSTDIR\start-bridge.vbs"'
+  WriteRegStr HKCU "Software\Classes\redactproof\DefaultIcon" "" "$INSTDIR\app.ico"
+  WriteRegStr HKCU "Software\Classes\redactproof\shell\open\command" "" '"$INSTDIR\LaunchAccelerator.exe"'
+  ${If} $1 != 0
+    DetailPrint "Scheduled task registration failed (code $1) - launcher will fall back to direct start"
   ${EndIf}
+
+  ; Start-menu launch entry, so searching "RedactProof" offers a way to start
+  ; the accelerator instead of only the uninstaller.
+  CreateShortcut "$SMPROGRAMS\${APP_NAME}\Start ${APP_NAME}.lnk" "$INSTDIR\LaunchAccelerator.exe" "" "$INSTDIR\app.ico"
 
   ; ===== Step 7: Launch immediately =====
   Exec '"wscript.exe" "$INSTDIR\start-bridge.vbs"'
@@ -249,6 +255,7 @@ Section "Uninstall"
 
   ; Start menu.
   Delete "$SMPROGRAMS\${APP_NAME}\Uninstall.lnk"
+  Delete "$SMPROGRAMS\${APP_NAME}\Start ${APP_NAME}.lnk"
   RMDir  "$SMPROGRAMS\${APP_NAME}"
 
   ; Registry.
