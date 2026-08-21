@@ -172,6 +172,38 @@ function Build-Arch($arch) {
     if ($LASTEXITCODE -ne 0) { throw "makensis failed for launcher stub" }
     if (-not (Test-Path $launcherOut)) { throw "launcher stub not produced: $launcherOut" }
 
+    # Windows system tray, compiled with the .NET Framework csc.exe that
+    # ships in Windows (and on GitHub runners) - no new toolchain. AnyCPU IL
+    # runs natively on x64 and (via .NET 4.8.1) ARM64. The old in-box
+    # compiler is C#-5-only; keep tray.cs written to that level.
+    Write-Host "[csc] compiling system tray"
+    $csc = @(
+        "$env:windir\Microsoft.NET\Framework64\v4.0.30319\csc.exe",
+        "$env:windir\Microsoft.NET\Framework\v4.0.30319\csc.exe"
+    ) | Where-Object { Test-Path $_ } | Select-Object -First 1
+    if (-not $csc) { throw 'csc.exe not found - .NET Framework 4.x missing' }
+    $versionCs = Join-Path $env:TEMP 'rp-tray-version.cs'
+    @"
+using System.Reflection;
+[assembly: AssemblyTitle("RedactProof Accelerator")]
+[assembly: AssemblyDescription("RedactProof Accelerator")]
+[assembly: AssemblyProduct("RedactProof Accelerator")]
+[assembly: AssemblyCompany("Popsall Ltd")]
+[assembly: AssemblyCopyright("(c) Popsall Ltd")]
+[assembly: AssemblyVersion("$APP_VERSION.0")]
+[assembly: AssemblyFileVersion("$APP_VERSION.0")]
+[assembly: AssemblyInformationalVersion("$APP_VERSION")]
+"@ | Set-Content $versionCs -Encoding UTF8
+    $trayCs  = Join-Path $scriptRoot 'windows\tray.cs'
+    $trayOut = Join-Path $payloadDir 'AcceleratorTray.exe'
+    $icoPath = Join-Path $scriptRoot 'assets\app.ico'
+    & $csc /nologo /target:winexe /platform:anycpu /optimize+ `
+        "/win32icon:$icoPath" "/out:$trayOut" `
+        /r:System.dll /r:System.Drawing.dll /r:System.Windows.Forms.dll `
+        $trayCs $versionCs | Out-Host
+    if ($LASTEXITCODE -ne 0 -or -not (Test-Path $trayOut)) { throw 'csc failed for tray' }
+    Remove-Item $versionCs -ErrorAction SilentlyContinue
+
     Write-Host "[nsis] compiling installer for $arch"
     $nsiPath = Join-Path $scriptRoot 'installer.nsi'
     & cmd /c "`"$makensis`" /DARCH=$arch /DAPP_VERSION=$APP_VERSION `"$nsiPath`" 2>&1" | Out-Host

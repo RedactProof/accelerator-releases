@@ -105,6 +105,9 @@ Section "Install"
   nsExec::Exec 'schtasks /End /TN "${APP_ID}"'
   nsExec::Exec 'cmd /c "if exist "$INSTDIR\bridge.pid" (for /f "usebackq" %i in ("$INSTDIR\bridge.pid") do taskkill /F /PID %i)"'
   nsExec::Exec `powershell -NoProfile -Command "Get-Process node -ErrorAction SilentlyContinue | Where-Object { $$_.Path -eq '$INSTDIR\node.exe' } | Stop-Process -Force"`
+  ; Stop a running tray too, or its exe stays locked and extraction fails
+  ; the same way node.exe used to.
+  nsExec::Exec `powershell -NoProfile -Command "Get-Process AcceleratorTray -ErrorAction SilentlyContinue | Where-Object { $$_.Path -eq '$INSTDIR\AcceleratorTray.exe' } | Stop-Process -Force"`
   ; Give the OS a moment to release file handles before extraction.
   Sleep 800
 
@@ -139,9 +142,13 @@ Section "Install"
   File /r "..\dist\payload-${ARCH}\*.*"
   IfErrors payload_failed
 
-  ; ===== Step 4: Autostart via the launcher stub =====
-  ; LaunchAccelerator.exe --direct spawns node.exe hidden (ExecShell SW_HIDE)
-  ; and is used by HKCU\Run autostart AND the scheduled task's action.
+  ; ===== Step 4: Autostart via the system tray =====
+  ; AcceleratorTray.exe owns the login path: it ensures the bridge is
+  ; running (delegating the actual hidden spawn to LaunchAccelerator.exe
+  ; --direct) and gives the user status/restart/quit UI. The scheduled
+  ; task's action stays the fast-exiting stub: a long-running tray as the
+  ; task process would leave the task "Running" and IgnoreNew would then
+  ; swallow later redactproof:// launches.
   ;
   ; This REPLACED start-bridge.vbs. The vbs (wscript.exe running a
   ; hidden-window script from AppData) is a catalogued attacker technique and
@@ -155,7 +162,7 @@ Section "Install"
   ; flagged file on disk.
   Delete "$INSTDIR\start-bridge.vbs"
 
-  WriteRegStr HKCU "${RUN_KEY}" "${APP_ID}" '"$INSTDIR\LaunchAccelerator.exe" --direct'
+  WriteRegStr HKCU "${RUN_KEY}" "${APP_ID}" '"$INSTDIR\AcceleratorTray.exe"'
 
   CreateDirectory "$SMPROGRAMS\${APP_NAME}"
   CreateShortcut  "$SMPROGRAMS\${APP_NAME}\Uninstall.lnk" "$INSTDIR\Uninstall.exe"
@@ -227,11 +234,12 @@ Section "Install"
   ${EndIf}
 
   ; Start-menu launch entry, so searching "RedactProof" offers a way to start
-  ; the accelerator instead of only the uninstaller.
-  CreateShortcut "$SMPROGRAMS\${APP_NAME}\Start ${APP_NAME}.lnk" "$INSTDIR\LaunchAccelerator.exe" "" "$INSTDIR\app.ico"
+  ; the accelerator instead of only the uninstaller. Points at the tray,
+  ; which ensures the bridge and gives visible feedback that it worked.
+  CreateShortcut "$SMPROGRAMS\${APP_NAME}\Start ${APP_NAME}.lnk" "$INSTDIR\AcceleratorTray.exe" "" "$INSTDIR\app.ico"
 
   ; ===== Step 7: Launch immediately =====
-  Exec '"$INSTDIR\LaunchAccelerator.exe" --direct'
+  Exec '"$INSTDIR\AcceleratorTray.exe"'
   Return
 
   payload_failed:
@@ -246,6 +254,7 @@ Section "Uninstall"
   nsExec::Exec 'schtasks /End /TN "${APP_ID}"'
   nsExec::Exec 'cmd /c "if exist "$INSTDIR\bridge.pid" (for /f "usebackq" %i in ("$INSTDIR\bridge.pid") do taskkill /F /PID %i)"'
   nsExec::Exec `powershell -NoProfile -Command "Get-Process node -ErrorAction SilentlyContinue | Where-Object { $$_.Path -eq '$INSTDIR\node.exe' } | Stop-Process -Force"`
+  nsExec::Exec `powershell -NoProfile -Command "Get-Process AcceleratorTray -ErrorAction SilentlyContinue | Where-Object { $$_.Path -eq '$INSTDIR\AcceleratorTray.exe' } | Stop-Process -Force"`
   Sleep 800
   Sleep 500
 
