@@ -76,16 +76,16 @@ VIAddVersionKey "LegalCopyright" "(c) Popsall Ltd"
 Function .onInit
   ${If} "${ARCH}" == "arm64"
     ${IfNot} ${IsNativeARM64}
-      MessageBox MB_ICONSTOP "This is the ARM64 build of ${APP_NAME}, but this PC is not ARM64.$\r$\n$\r$\nDownload the x64 installer from ${APP_URL} instead."
+      MessageBox MB_ICONSTOP "This is the ARM64 build of ${APP_NAME}, but this PC is not ARM64.$\r$\n$\r$\nDownload the x64 installer from ${APP_URL} instead." /SD IDOK
       Abort
     ${EndIf}
   ${ElseIf} "${ARCH}" == "x64"
     ${If} ${IsNativeARM64}
-      MessageBox MB_ICONSTOP "This is the x64 build of ${APP_NAME}, but this PC is ARM64.$\r$\n$\r$\nDownload the ARM64 installer from ${APP_URL} instead."
+      MessageBox MB_ICONSTOP "This is the x64 build of ${APP_NAME}, but this PC is ARM64.$\r$\n$\r$\nDownload the ARM64 installer from ${APP_URL} instead." /SD IDOK
       Abort
     ${EndIf}
     ${IfNot} ${IsNativeAMD64}
-      MessageBox MB_ICONSTOP "${APP_NAME} requires 64-bit Windows."
+      MessageBox MB_ICONSTOP "${APP_NAME} requires 64-bit Windows." /SD IDOK
       Abort
     ${EndIf}
   ${EndIf}
@@ -106,7 +106,12 @@ Section "Install"
   nsExec::Exec 'cmd /c "if exist "$INSTDIR\bridge.pid" (for /f "usebackq" %i in ("$INSTDIR\bridge.pid") do taskkill /F /PID %i)"'
   nsExec::Exec `powershell -NoProfile -Command "Get-Process node -ErrorAction SilentlyContinue | Where-Object { $$_.Path -eq '$INSTDIR\node.exe' } | Stop-Process -Force"`
   ; Stop a running tray too, or its exe stays locked and extraction fails
-  ; the same way node.exe used to.
+  ; the same way node.exe used to. Name-based taskkill FIRST: during the
+  ; 0.2.0 upgrade test a running tray survived the path-filtered powershell
+  ; kill and the locked exe hung a silent install on NSIS's invisible
+  ; retry dialog. The exe name is ours alone, so /IM is safe; the
+  ; path-filtered kill stays as the precise second layer.
+  nsExec::Exec 'taskkill /F /IM AcceleratorTray.exe'
   nsExec::Exec `powershell -NoProfile -Command "Get-Process AcceleratorTray -ErrorAction SilentlyContinue | Where-Object { $$_.Path -eq '$INSTDIR\AcceleratorTray.exe' } | Stop-Process -Force"`
   ; Give the OS a moment to release file handles before extraction.
   Sleep 800
@@ -243,7 +248,9 @@ Section "Install"
   Return
 
   payload_failed:
-    MessageBox MB_ICONSTOP "Install failed: payload could not be extracted.$\r$\n$\r$\nUse Settings -> Apps -> ${APP_NAME} -> Uninstall to clean up, then try again."
+    ; /SD makes silent installs auto-answer instead of blocking forever on
+    ; an invisible dialog (a /S upgrade hung exactly here on 2026-08-21).
+    MessageBox MB_ICONSTOP "Install failed: payload could not be extracted.$\r$\n$\r$\nUse Settings -> Apps -> ${APP_NAME} -> Uninstall to clean up, then try again." /SD IDOK
     Abort
 SectionEnd
 
@@ -254,6 +261,7 @@ Section "Uninstall"
   nsExec::Exec 'schtasks /End /TN "${APP_ID}"'
   nsExec::Exec 'cmd /c "if exist "$INSTDIR\bridge.pid" (for /f "usebackq" %i in ("$INSTDIR\bridge.pid") do taskkill /F /PID %i)"'
   nsExec::Exec `powershell -NoProfile -Command "Get-Process node -ErrorAction SilentlyContinue | Where-Object { $$_.Path -eq '$INSTDIR\node.exe' } | Stop-Process -Force"`
+  nsExec::Exec 'taskkill /F /IM AcceleratorTray.exe'
   nsExec::Exec `powershell -NoProfile -Command "Get-Process AcceleratorTray -ErrorAction SilentlyContinue | Where-Object { $$_.Path -eq '$INSTDIR\AcceleratorTray.exe' } | Stop-Process -Force"`
   Sleep 800
   Sleep 500
