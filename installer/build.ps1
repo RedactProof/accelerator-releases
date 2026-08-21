@@ -157,13 +157,14 @@ function Build-Arch($arch) {
     Get-ChildItem -Path $payloadDir -Recurse -Directory -Filter '@img' -ErrorAction SilentlyContinue |
         ForEach-Object { Remove-Item -Recurse -Force $_.FullName }
 
-    # Branded launcher stub, compiled INTO the payload so it installs
-    # alongside start-bridge.vbs. It is the redactproof:// handler target:
-    # pointing the scheme straight at schtasks.exe made the browser prompt
-    # read "Open Task Scheduler Configuration Tool?", which looks like
-    # malware. The stub carries our own FileDescription, so the prompt names
-    # RedactProof instead. Architecture-independent (it only shells out), but
-    # built per-arch payload for simplicity.
+    # Branded launcher stub, compiled INTO the payload. It is the
+    # redactproof:// handler target AND (via --direct) the silent launcher
+    # for autostart + the scheduled task, replacing start-bridge.vbs (which
+    # Defender ML flagged as a trojan - see launcher.nsi header). It also
+    # fixes the browser prompt: pointing the scheme straight at schtasks.exe
+    # made it read "Open Task Scheduler Configuration Tool?", which looks
+    # like malware. Architecture-independent (it only shells out), but built
+    # per-arch payload for simplicity.
     Write-Host "[nsis] compiling branded launcher stub"
     $launcherNsi = Join-Path $scriptRoot 'launcher.nsi'
     $launcherOut = Join-Path $payloadDir 'LaunchAccelerator.exe'

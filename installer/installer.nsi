@@ -7,7 +7,8 @@
 ;   3. Write the Add/Remove Programs registry block - so even if a later step
 ;      fails, the user always has a working Uninstall path.
 ;   4. Extract the payload (the most likely failure point) with IfErrors.
-;   5. Create launcher .vbs, autostart entry, start-menu shortcut.
+;   5. Autostart entry, scheduled task, URL scheme, start-menu shortcuts -
+;      every launch path goes through the bundled LaunchAccelerator.exe stub.
 ;   6. Launch the bridge.
 
 !define APP_NAME "RedactProof Accelerator"
@@ -138,18 +139,23 @@ Section "Install"
   File /r "..\dist\payload-${ARCH}\*.*"
   IfErrors payload_failed
 
-  ; ===== Step 4: Launcher scripts, autostart, shortcut =====
-  ; .vbs — used by HKCU\Run autostart and by the scheduled task.
-  ; wscript.exe + WScript.Shell.Run is the correct per-user silent launcher:
-  ; it works from the Task Scheduler context (which is outside the browser's
-  ; Job Object — the root cause that killed the previous PowerShell approach).
-  FileOpen $0 "$INSTDIR\start-bridge.vbs" w
-  FileWrite $0 'Set ws = CreateObject("WScript.Shell")$\r$\n'
-  FileWrite $0 'ws.CurrentDirectory = "$INSTDIR"$\r$\n'
-  FileWrite $0 'ws.Run """$INSTDIR\node.exe"" ""$INSTDIR\server.mjs""", 0, False$\r$\n'
-  FileClose $0
+  ; ===== Step 4: Autostart via the launcher stub =====
+  ; LaunchAccelerator.exe --direct spawns node.exe hidden (ExecShell SW_HIDE)
+  ; and is used by HKCU\Run autostart AND the scheduled task's action.
+  ;
+  ; This REPLACED start-bridge.vbs. The vbs (wscript.exe running a
+  ; hidden-window script from AppData) is a catalogued attacker technique and
+  ; Defender's ML flagged it as Trojan:Win32/Commando.A!ml (Severe) on a
+  ; customer machine, 2026-08-21. Do not reintroduce wscript or hidden
+  ; powershell wrappers on any launch path - the hidden-scripting-host
+  ; pattern is what trips AV, regardless of what the script does.
+  ;
+  ; Upgrade hygiene: earlier builds (<=0.1.1) wrote the vbs; File /r doesn't
+  ; remove stray files, so delete it explicitly or upgraded installs keep the
+  ; flagged file on disk.
+  Delete "$INSTDIR\start-bridge.vbs"
 
-  WriteRegStr HKCU "${RUN_KEY}" "${APP_ID}" '"wscript.exe" "$INSTDIR\start-bridge.vbs"'
+  WriteRegStr HKCU "${RUN_KEY}" "${APP_ID}" '"$INSTDIR\LaunchAccelerator.exe" --direct'
 
   CreateDirectory "$SMPROGRAMS\${APP_NAME}"
   CreateShortcut  "$SMPROGRAMS\${APP_NAME}\Uninstall.lnk" "$INSTDIR\Uninstall.exe"
@@ -188,8 +194,8 @@ Section "Install"
   FileWrite $0 '  </Settings>$\r$\n'
   FileWrite $0 '  <Actions Context="Author">$\r$\n'
   FileWrite $0 '    <Exec>$\r$\n'
-  FileWrite $0 '      <Command>wscript.exe</Command>$\r$\n'
-  FileWrite $0 '      <Arguments>$\"$INSTDIR\start-bridge.vbs$\"</Arguments>$\r$\n'
+  FileWrite $0 '      <Command>$INSTDIR\LaunchAccelerator.exe</Command>$\r$\n'
+  FileWrite $0 '      <Arguments>--direct</Arguments>$\r$\n'
   FileWrite $0 '    </Exec>$\r$\n'
   FileWrite $0 '  </Actions>$\r$\n'
   FileWrite $0 '</Task>$\r$\n'
@@ -210,8 +216,8 @@ Section "Install"
   ; malware to anyone sensible. The stub carries FileDescription="RedactProof
   ; Accelerator", so the prompt names us.
   ;
-  ; The stub also falls back to start-bridge.vbs by itself when the task is
-  ; missing, so a launch link can't be a dead end.
+  ; The stub also falls back to spawning node directly by itself when the
+  ; task is missing, so a launch link can't be a dead end.
   WriteRegStr HKCU "Software\Classes\redactproof" "" "URL:RedactProof Accelerator"
   WriteRegStr HKCU "Software\Classes\redactproof" "URL Protocol" ""
   WriteRegStr HKCU "Software\Classes\redactproof\DefaultIcon" "" "$INSTDIR\app.ico"
@@ -225,7 +231,7 @@ Section "Install"
   CreateShortcut "$SMPROGRAMS\${APP_NAME}\Start ${APP_NAME}.lnk" "$INSTDIR\LaunchAccelerator.exe" "" "$INSTDIR\app.ico"
 
   ; ===== Step 7: Launch immediately =====
-  Exec '"wscript.exe" "$INSTDIR\start-bridge.vbs"'
+  Exec '"$INSTDIR\LaunchAccelerator.exe" --direct'
   Return
 
   payload_failed:
@@ -250,7 +256,8 @@ Section "Uninstall"
   ; Remove discovery file.
   Delete "$PROFILE\.redactproof\accelerator.json"
 
-  ; Remove install dir (includes start-bridge.vbs, start-bridge.ps1, etc).
+  ; Remove install dir (includes the launcher stub and any legacy
+  ; start-bridge.vbs/.ps1 from older builds).
   RMDir /r "$INSTDIR"
 
   ; Start menu.
