@@ -103,6 +103,10 @@ jobs:
 
           cp payload/node              "$APP/Contents/Resources/node"
           cp payload/server.mjs        "$APP/Contents/Resources/server.mjs"
+          # server.mjs reads its version from package.json at runtime; without
+          # this copy the Mac bridge self-reports 0.0.0 and the web app's
+          # update banner nags forever (found on the first 0.2.1 Mac install).
+          cp payload/package.json      "$APP/Contents/Resources/package.json"
           cp payload/core.bin          "$APP/Contents/Resources/core.bin"
           cp -r payload/tokenizer      "$APP/Contents/Resources/tokenizer"
           cp -r payload/node_modules   "$APP/Contents/Resources/node_modules"
